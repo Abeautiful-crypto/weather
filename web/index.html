@@ -1110,7 +1110,7 @@
     state.suggestList = list;
     state.suggestIndex = -1;
     if (!list.length) {
-      ul.innerHTML = '<li class="empty">未找到相关城市，换个关键词试试</li>';
+      ul.innerHTML = '<li class="empty">未找到相关城市：去掉省份只填城市名，或改用拼音（如 宿迁 → Suqian）</li>';
       ul.hidden = false;
       return;
     }

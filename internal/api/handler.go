@@ -81,6 +81,8 @@ func (s *Server) handleAPINotFound(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, fmt.Sprintf("接口不存在：%s", r.URL.Path))
 }
 
+// handleGeocode 不复用 proxy：它需要先做候选降级与重排序（见 geocode.go），
+// 因此这里单独走一遍流程，但复用同一套错误与响应辅助函数。
 func (s *Server) handleGeocode(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
@@ -92,13 +94,22 @@ func (s *Server) handleGeocode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	params := url.Values{}
-	params.Set("name", q)
-	params.Set("count", "6")
-	params.Set("language", "zh")
-	params.Set("format", "json")
+	// 候选词由纯函数推导，因此缓存命中时也能如实告知本次尝试了哪些词
+	w.Header().Set("X-Geocode-Candidates", strings.Join(geocodeCandidates(q), ","))
 
-	s.proxy(w, r, "geocode", "geocode:"+strings.ToLower(q), s.up.Endpoints().Geocode, params)
+	key := "geocode:" + strings.ToLower(q)
+	data, err, hit := s.cache.GetOrLoad(key, func() ([]byte, bool, error) {
+		body, searchErr := s.searchPlaces(context.WithoutCancel(r.Context()), q)
+		if searchErr != nil {
+			return nil, false, searchErr
+		}
+		return body, json.Valid(body), nil
+	})
+	if err != nil {
+		s.writeProxyError(w, "geocode", err)
+		return
+	}
+	s.writeCachedJSON(w, "geocode", key, data, hit)
 }
 
 func (s *Server) handleWeather(w http.ResponseWriter, r *http.Request) {
@@ -166,17 +177,26 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, name, key, endpoi
 	})
 
 	if err != nil {
-		var upErr *upstream.Error
-		if errors.As(err, &upErr) {
-			s.logger.Warn("代理失败", "api", name, "status", upErr.Status, "err", upErr)
-			writeError(w, upErr.Status, upErr.Msg)
-			return
-		}
-		s.logger.Error("代理异常", "api", name, "err", err)
-		writeError(w, http.StatusInternalServerError, "服务内部错误")
+		s.writeProxyError(w, name, err)
 		return
 	}
+	s.writeCachedJSON(w, name, key, data, hit)
+}
 
+// writeProxyError 把加载阶段的错误转换成对用户的响应。
+func (s *Server) writeProxyError(w http.ResponseWriter, name string, err error) {
+	var upErr *upstream.Error
+	if errors.As(err, &upErr) {
+		s.logger.Warn("代理失败", "api", name, "status", upErr.Status, "err", upErr)
+		writeError(w, upErr.Status, upErr.Msg)
+		return
+	}
+	s.logger.Error("代理异常", "api", name, "err", err)
+	writeError(w, http.StatusInternalServerError, "服务内部错误")
+}
+
+// writeCachedJSON 写回数据，并带上 X-Cache 便于验证命中行为。
+func (s *Server) writeCachedJSON(w http.ResponseWriter, name, key string, data []byte, hit bool) {
 	if hit {
 		s.logger.Info("cache hit", "api", name, "key", key)
 		w.Header().Set("X-Cache", "HIT")

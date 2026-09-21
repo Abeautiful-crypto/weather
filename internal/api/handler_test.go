@@ -274,23 +274,176 @@ func TestWeatherProxiesThenServesFromCache(t *testing.T) {
 	}
 }
 
+// 候选词生成是纯函数，直接表驱动测试，避免依赖上游。
+func TestGeocodeCandidates(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"南阳", []string{"南阳", "南阳市"}},
+		{"南阳市", []string{"南阳市"}},                // 已带后缀，不再追加「市」
+		{"宿城区", []string{"宿城区"}},                // 区/县同样不追加
+		{"上海", []string{"上海", "上海市"}},           // 直辖市：剥前缀后为空
+		{"江苏宿迁", []string{"江苏宿迁", "宿迁", "宿迁市"}}, // 省+市：拆词
+		{"河南南阳", []string{"河南南阳", "南阳", "南阳市"}}, // 省+市：拆词
+		{"北京路", []string{"北京路", "北京路市"}},        // 剩余不足两字，不做无意义的拆词
+		// 「州」不是行政后缀：徐州/苏州/杭州 这类城市名必须带上加「市」的变体去查，
+		// 否则会漏掉 PPLA2 的正式城市条目（实测 `徐州` 只有 PPLA3/PPL）
+		{"徐州", []string{"徐州", "徐州市"}},
+		{"苏州", []string{"苏州", "苏州市"}},
+		{"杭州", []string{"杭州", "杭州市"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			got := geocodeCandidates(tc.in)
+			if len(got) != len(tc.want) {
+				t.Fatalf("geocodeCandidates(%q) = %v，期望 %v", tc.in, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("geocodeCandidates(%q) = %v，期望 %v", tc.in, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestFeatureRankOrdersCitiesBeforeVillages(t *testing.T) {
+	order := []string{"PPLC", "PPLA", "PPLA2", "PPLA3", "PPLA4", "PPLA5", "PPL", "PPLX", "PPLZ"}
+	for i := 1; i < len(order); i++ {
+		if featureRank(order[i-1]) >= featureRank(order[i]) {
+			t.Fatalf("%s 的权重应小于 %s", order[i-1], order[i])
+		}
+	}
+}
+
 func TestGeocodeForwardsQuery(t *testing.T) {
-	var gotName, gotLang, gotCount string
+	var mu sync.Mutex
+	var names []string
+	var gotLang, gotCount string
 	base, _ := newEnv(t, time.Minute, time.Second, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		gotName, gotLang, gotCount = q.Get("name"), q.Get("language"), q.Get("count")
+		mu.Lock()
+		names = append(names, q.Get("name"))
+		gotLang, gotCount = q.Get("language"), q.Get("count")
+		mu.Unlock()
 		_, _ = io.WriteString(w, validGeocode)
 	})
+	namesSeen := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), names...)
+	}
 
 	res := get(t, base+"/api/geocode?q=%E4%B8%8A%E6%B5%B7") // 上海
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("状态码应为 200，实际 %d", res.StatusCode)
 	}
-	if gotName != "上海" {
-		t.Fatalf("上游收到的 name 应为 上海，实际 %q", gotName)
+	got := namesSeen()
+	if len(got) != 2 || got[0] != "上海" || got[1] != "上海市" {
+		t.Fatalf("上游应依次收到候选 [上海 上海市]，实际 %v", got)
 	}
 	if gotLang != "zh" || gotCount != "6" {
 		t.Fatalf("上游参数不符：language=%q count=%q", gotLang, gotCount)
+	}
+	if hdr := res.Header.Get("X-Geocode-Candidates"); hdr != "上海,上海市" {
+		t.Fatalf("X-Geocode-Candidates 不符：%q", hdr)
+	}
+}
+
+// 「省+市」输入上游一律 0 条（实测：江苏宿迁、河南南阳都查不到），
+// 服务端必须自己拆词重试，否则用户看到的就是"未找到相关城市"。
+func TestGeocodeNormalizesProvinceCityInput(t *testing.T) {
+	var mu sync.Mutex
+	var names []string
+	base, _ := newEnv(t, time.Minute, time.Second, func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("name")
+		mu.Lock()
+		names = append(names, name)
+		mu.Unlock()
+		if name == "宿迁市" {
+			_, _ = io.WriteString(w, `{"results":[{"id":1,"name":"宿迁市","latitude":33.96,"longitude":118.29,"feature_code":"PPLA2","population":1437685}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{}`)
+	})
+	namesSeen := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return strings.Join(names, ",")
+	}
+
+	res := get(t, base+"/api/geocode?q="+url.QueryEscape("江苏宿迁"))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("状态码应为 200，实际 %d", res.StatusCode)
+	}
+	body, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(body), "宿迁市") {
+		t.Fatalf("拆词后应能搜到宿迁市，实际：%s", body)
+	}
+	if tried := namesSeen(); !strings.Contains(tried, "宿迁") {
+		t.Fatalf("应尝试剥离省级前缀后的词，实际尝试：%s", tried)
+	}
+}
+
+// 上游不按行政级别排序：`南阳` 首条是人口 1.2 万的 PPLA4 村镇，
+// 真正的地级市只在 `南阳市` 里出现。合并候选后必须把地级市排到最前。
+func TestGeocodeRanksRealCityFirst(t *testing.T) {
+	base, _ := newEnv(t, time.Minute, time.Second, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("name") {
+		case "南阳":
+			_, _ = io.WriteString(w, `{"results":[{"id":11,"name":"南阳","latitude":33.95,"longitude":104.64,"feature_code":"PPLA4","population":12267}]}`)
+		case "南阳市":
+			_, _ = io.WriteString(w, `{"results":[{"id":22,"name":"南阳市","latitude":33.0,"longitude":112.54,"feature_code":"PPLA2","population":1811812}]}`)
+		default:
+			_, _ = io.WriteString(w, `{}`)
+		}
+	})
+
+	res := get(t, base+"/api/geocode?q="+url.QueryEscape("南阳"))
+	var parsed struct {
+		Results []struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&parsed); err != nil {
+		t.Fatalf("响应不是合法 JSON：%v", err)
+	}
+	if len(parsed.Results) != 2 {
+		t.Fatalf("应合并两条候选结果，实际 %d 条", len(parsed.Results))
+	}
+	if parsed.Results[0].ID != 22 {
+		t.Fatalf("地级市（PPLA2）应排在村镇（PPLA4）之前，实际首位=%s(id=%d)",
+			parsed.Results[0].Name, parsed.Results[0].ID)
+	}
+	if res.Header.Get("X-Geocode-Candidates") != "南阳,南阳市" {
+		t.Fatalf("X-Geocode-Candidates 不符：%q", res.Header.Get("X-Geocode-Candidates"))
+	}
+}
+
+func TestGeocodeDeduplicatesAcrossCandidates(t *testing.T) {
+	base, _ := newEnv(t, time.Minute, time.Second, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"results":[{"id":7,"name":"某地","latitude":1,"longitude":2,"feature_code":"PPLA2","population":100}]}`)
+	})
+
+	res := get(t, base+"/api/geocode?q="+url.QueryEscape("南阳"))
+	body, _ := io.ReadAll(res.Body)
+	if n := strings.Count(string(body), `"id":7`); n != 1 {
+		t.Fatalf("同一 id 只应出现一次，实际 %d 次：%s", n, body)
+	}
+}
+
+// 全部候选都没结果时必须返回 {"results":[]}（而不是 null），前端才能走到"未找到"分支。
+func TestGeocodeAllCandidatesEmptyReturnsEmptyArray(t *testing.T) {
+	base, _ := newEnv(t, time.Minute, time.Second, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{}`)
+	})
+
+	res := get(t, base+"/api/geocode?q="+url.QueryEscape("宿迁"))
+	body, _ := io.ReadAll(res.Body)
+	if strings.TrimSpace(string(body)) != `{"results":[]}` {
+		t.Fatalf("空结果应为 {\"results\":[]}，实际：%s", body)
 	}
 }
 
