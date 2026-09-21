@@ -541,15 +541,17 @@
     var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 12000);
     return fetch(url, ctrl ? { signal: ctrl.signal } : undefined).then(function (res) {
-      if (!res.ok) {
-        // 后端统一返回 {"error":"..."}，优先展示其中的中文提示
-        return res.text().then(function (txt) {
-          var msg = '';
-          try { var j = JSON.parse(txt); if (j && j.error) msg = j.error; } catch (e) { /* 非 JSON 响应体 */ }
-          throw new Error(msg || ('接口返回异常（HTTP ' + res.status + '）'));
-        });
-      }
-      return res.json();
+      // 统一按文本读一次再自己解析：既能取出后端的 {"error":"..."}，
+      // 也能在响应体不是 JSON 时给出中文提示，而不是抛英文的 JSON 解析错误。
+      return res.text().then(function (txt) {
+        var parsed = null, valid = true;
+        try { parsed = JSON.parse(txt); } catch (e) { valid = false; }
+        if (!res.ok) {
+          throw new Error((parsed && parsed.error) || ('接口返回异常（HTTP ' + res.status + '）'));
+        }
+        if (!valid) throw new Error('服务返回的数据格式异常，请稍后重试');
+        return parsed;
+      });
     }).then(function (out) {
       clearTimeout(timer);
       return out;

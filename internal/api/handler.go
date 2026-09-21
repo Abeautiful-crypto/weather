@@ -125,8 +125,17 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, name, key, endpoi
 		if fetchErr != nil {
 			return nil, false, fetchErr
 		}
-		// 只有能被解析的 JSON 才写入缓存；否则原样透传交给前端兜底。
-		return body, json.Valid(body), nil
+		// 上游契约就是 JSON。返回非 JSON 说明上游异常（被网关插入了错误页之类），
+		// 按故障处理并映射为 502，而不是把无法解析的原始体透传给前端——那样前端
+		// 只会在 res.json() 上抛出一个英文的解析错误，用户看到的是堆栈式文案。
+		// 注意：这与"字段缺失"是两回事，字段缺失仍由前端的"暂无数据"逻辑兜底。
+		if !json.Valid(body) {
+			return nil, false, &upstream.Error{
+				Status: http.StatusBadGateway,
+				Msg:    "上游返回了无法解析的数据，请稍后重试",
+			}
+		}
+		return body, true, nil
 	})
 
 	if err != nil {

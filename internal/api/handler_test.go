@@ -282,22 +282,27 @@ func TestAirProxiesSuccessfully(t *testing.T) {
 	}
 }
 
-func TestInvalidJSONIsPassedThroughButNotCached(t *testing.T) {
+// 上游返回 200 但不是 JSON 时，按上游故障处理：映射为 502、给出中文提示、
+// 不把无法解析的原始体回显给客户端，且失败结果不入缓存。
+func TestInvalidJSONMapsTo502AndIsNotCached(t *testing.T) {
 	base, calls := newEnv(t, time.Minute, time.Second, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "not a json at all")
 	})
 
 	url := base + "/api/weather?lat=1&lon=2"
 	first := get(t, url)
-	if first.StatusCode != http.StatusOK {
-		t.Fatalf("非 JSON 响应应原样透传 200，实际 %d", first.StatusCode)
+	if first.StatusCode != http.StatusBadGateway {
+		t.Fatalf("上游非 JSON 应映射为 502，实际 %d", first.StatusCode)
 	}
-	body, _ := io.ReadAll(first.Body)
-	if string(body) != "not a json at all" {
-		t.Fatalf("透传内容不符：%s", body)
+	body := jsonBody(t, first)
+	if !strings.Contains(body["error"], "无法解析") {
+		t.Fatalf("错误信息不符：%v", body)
+	}
+	if strings.Contains(body["error"], "not a json at all") {
+		t.Fatalf("不应把上游原始响应体回显给客户端：%v", body)
 	}
 
-	get(t, url) // 第二次仍应打到上游
+	get(t, url) // 失败不缓存，重试仍应打到上游
 	if got := atomic.LoadInt32(calls); got != 2 {
 		t.Fatalf("不可解析的响应不应被缓存，上游应被调用 2 次，实际 %d 次", got)
 	}
