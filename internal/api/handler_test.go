@@ -309,6 +309,68 @@ func TestGeocodeCandidates(t *testing.T) {
 	}
 }
 
+func TestLevelOfFeatureCode(t *testing.T) {
+	cases := map[string]string{
+		"PPLC":  "首都",
+		"PPLA":  "省级",
+		"PPLA2": "地级",
+		"PPLA3": "县级", // 镇平县（河南南阳）在上游里就是 PPLA3
+		"PPLA4": "乡镇级",
+		"PPL":   "村镇级", // 福建龙岩那个同名的"镇平"是 PPL
+		"PPLX":  "城区",
+		"":      "",
+		"XXXX":  "",
+	}
+	for code, want := range cases {
+		if got := levelOfFeatureCode(code); got != want {
+			t.Fatalf("levelOfFeatureCode(%q) = %q，期望 %q", code, got, want)
+		}
+	}
+}
+
+// 搜索结果必须带上归一化的 level 字段，且只新增字段、不改写上游原有字段，
+// 让前端能把"村镇级同名点"标出来（避免把福建的村镇误当成河南的镇平县）。
+func TestGeocodeAnnotatesLevelWithoutDroppingUpstreamFields(t *testing.T) {
+	base, _ := newEnv(t, time.Minute, time.Second, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("name") {
+		case "镇平":
+			_, _ = io.WriteString(w, `{"results":[{"id":7526360,"name":"镇平","latitude":25.95487,"longitude":116.32685,"elevation":635.0,"feature_code":"PPL","country":"中国","admin1":"福建省","admin2":"龙岩市"}]}`)
+		case "镇平县":
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			_, _ = io.WriteString(w, `{}`)
+		}
+	})
+
+	res := get(t, base+"/api/geocode?q="+url.QueryEscape("镇平"))
+	var parsed struct {
+		Results []struct {
+			Name        string  `json:"name"`
+			Level       string  `json:"level"`
+			FeatureCode string  `json:"feature_code"`
+			Latitude    float64 `json:"latitude"`
+			Admin1      string  `json:"admin1"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&parsed); err != nil {
+		t.Fatalf("响应不是合法 JSON：%v", err)
+	}
+	if len(parsed.Results) != 1 {
+		t.Fatalf("应返回 1 条，实际 %d 条", len(parsed.Results))
+	}
+	got := parsed.Results[0]
+	if got.Level != "村镇级" {
+		t.Fatalf("PPL 结果应标注为村镇级，实际 %q", got.Level)
+	}
+	// 上游原字段必须原样保留
+	if got.FeatureCode != "PPL" || got.Admin1 != "福建省" || got.Latitude != 25.95487 {
+		t.Fatalf("不应改写上游字段：%+v", got)
+	}
+	if !strings.Contains(res.Header.Get("X-Geocode-Candidates"), "镇平") {
+		t.Fatalf("候选头应包含关键词，实际 %q", res.Header.Get("X-Geocode-Candidates"))
+	}
+}
+
 func TestFeatureRankOrdersCitiesBeforeVillages(t *testing.T) {
 	order := []string{"PPLC", "PPLA", "PPLA2", "PPLA3", "PPLA4", "PPLA5", "PPL", "PPLX", "PPLZ"}
 	for i := 1; i < len(order); i++ {

@@ -69,6 +69,11 @@
   }
   .suggest li .s-name{font-weight:600}
   .suggest li .s-sub{color:var(--txt-faint); font-size:12.5px}
+  /* 低置信度级别标注：同名村镇很多，标出来避免被误当成县级行政区选中 */
+  .suggest li .s-level{
+    padding:1px 6px; border-radius:6px; font-size:11px; line-height:1.6;
+    color:#ffd9a0; background:rgba(255,170,60,.18); border:1px solid rgba(255,170,60,.34);
+  }
   .suggest li.active, .suggest li:hover{background:rgba(255,255,255,.12)}
   .suggest li.empty{cursor:default; color:var(--txt-faint); justify-content:center}
   .suggest li.empty:hover{background:transparent}
@@ -1117,8 +1122,12 @@
     }
     ul.innerHTML = list.map(function (p, i) {
       var sub = [p.admin1, p.country].filter(function (s) { return s && s !== p.name; }).join(' · ');
+      // 低置信度标注：中文同名小地名极多（如"镇平"在福建龙岩有村镇级同名点），
+      // 标出级别避免被误当成县级行政区选中。
+      var low = (p.level === '村镇级' || p.level === '乡镇级');
       return '<li role="option" data-i="' + i + '">' +
         '<span class="s-name">' + escapeHtml(p.name) + '</span>' +
+        (low ? '<span class="s-level">' + escapeHtml(p.level) + '</span>' : '') +
         (sub ? '<span class="s-sub">' + escapeHtml(sub) + '</span>' : '') +
       '</li>';
     }).join('');

@@ -241,7 +241,54 @@ func (s *Server) searchPlaces(ctx context.Context, q string) ([]byte, error) {
 	for _, it := range all {
 		results = append(results, it.raw)
 	}
-	return json.Marshal(map[string]any{"results": results})
+	return json.Marshal(map[string]any{"results": annotateLevels(results)})
+}
+
+// levelOfFeatureCode 把 GeoNames 的 feature_code 归一化成中文行政级别。
+//
+// 前端据此给"村镇级/乡镇级"的低置信度结果加标注：中文同名小地名极多
+// （例如"镇平"在福建龙岩有一个村镇级同名点），不标注就会被误选成县级行政区。
+func levelOfFeatureCode(code string) string {
+	switch code {
+	case "PPLC":
+		return "首都"
+	case "PPLA":
+		return "省级"
+	case "PPLA2":
+		return "地级"
+	case "PPLA3":
+		return "县级"
+	case "PPLA4", "PPLA5":
+		return "乡镇级"
+	case "PPL":
+		return "村镇级"
+	case "PPLX":
+		return "城区"
+	default:
+		return ""
+	}
+}
+
+// annotateLevels 给每个结果**追加**一个归一化的 level 字段。
+// 只新增这一个字段，上游原有字段一律不改写、不删除；解析失败的条目原样返回。
+func annotateLevels(results []json.RawMessage) []json.RawMessage {
+	out := make([]json.RawMessage, 0, len(results))
+	for _, raw := range results {
+		var obj map[string]any
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			out = append(out, raw)
+			continue
+		}
+		code, _ := obj["feature_code"].(string)
+		obj["level"] = levelOfFeatureCode(code)
+		encoded, err := json.Marshal(obj)
+		if err != nil {
+			out = append(out, raw)
+			continue
+		}
+		out = append(out, encoded)
+	}
+	return out
 }
 
 // qweatherPlace 是和风 GeoAPI 结果映射后的形状。
