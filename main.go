@@ -71,13 +71,24 @@ func main() {
 	<-ctx.Done()
 	stop()
 
-	logger.Info("收到退出信号，正在关闭服务……")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	logger.Info("收到退出信号，正在关闭服务……", "shutdown_timeout", shutdownTimeout(*upstreamTimeout).String())
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout(*upstreamTimeout))
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("优雅关闭超时", "err", err)
 	}
 	logger.Info("服务已退出")
+}
+
+// shutdownTimeout 由 -upstream-timeout 推导，保证关停等待足以覆盖一次完整的
+// 上游调用（否则会出现"请求被强杀、上游 goroutine 仍在跑"的窗口），下限 5s。
+// 刻意不新增 flag：这样用户调大上游超时不会让关停行为静默变差。
+func shutdownTimeout(upstream time.Duration) time.Duration {
+	limit := upstream + 2*time.Second
+	if limit < 5*time.Second {
+		limit = 5 * time.Second
+	}
+	return limit
 }
 
 func newLogger(level string) *slog.Logger {
