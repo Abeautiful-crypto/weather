@@ -1,0 +1,10 @@
+# 仓库层面固定 LF。
+# 本机全局 core.autocrlf=true，若不在仓库内固定，checkout 会把 .go 文件转成 CRLF，
+# 而 gofmt 会把 CRLF 文件判定为"未格式化"，导致 `gofmt -l .` 报错。
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.png binary
+*.jpg binary
+*.ico binary
+*.exe binary
