@@ -308,6 +308,53 @@ func TestInvalidJSONMapsTo502AndIsNotCached(t *testing.T) {
 	}
 }
 
+// 客户端断开（此处用客户端超时模拟）不得连坐上游调用：上游仍应以未取消的
+// context 正常完成，并把结果写入缓存供后续请求命中。
+func TestClientCancelDoesNotCancelUpstream(t *testing.T) {
+	upstreamContext := make(chan error, 1)
+	upstreamDone := make(chan struct{})
+
+	base, calls := newEnv(t, time.Minute, time.Second, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond) // 故意慢于客户端超时
+		upstreamContext <- r.Context().Err()
+		_, _ = io.WriteString(w, validForecast)
+		close(upstreamDone)
+	})
+
+	client := &http.Client{Timeout: 80 * time.Millisecond}
+	res, err := client.Get(base + "/api/weather?lat=39.9&lon=116.4")
+	if err == nil {
+		res.Body.Close()
+		t.Fatal("客户端应当因超时而放弃本次请求")
+	}
+
+	select {
+	case ctxErr := <-upstreamContext:
+		if ctxErr != nil {
+			t.Fatalf("客户端断开后上游 context 不应被取消，实际 err=%v", ctxErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("上游请求未完成")
+	}
+	<-upstreamDone
+
+	// 断线的客户端反而替后续请求预热了缓存
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		r := get(t, base+"/api/weather?lat=39.9&lon=116.4")
+		if r.Header.Get("X-Cache") == "HIT" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("上游结果未写入缓存，上游调用次数=%d", atomic.LoadInt32(calls))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := atomic.LoadInt32(calls); got != 1 {
+		t.Fatalf("上游应只被调用 1 次，实际 %d 次", got)
+	}
+}
+
 /* ------------------------------------------------------------------ 错误映射 */
 
 func TestUpstreamNon2xxMapsTo502(t *testing.T) {

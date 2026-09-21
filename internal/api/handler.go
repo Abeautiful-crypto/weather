@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -120,8 +121,12 @@ func (s *Server) handleAir(w http.ResponseWriter, r *http.Request) {
 // proxy 走缓存 + 单飞的统一代理流程。
 func (s *Server) proxy(w http.ResponseWriter, r *http.Request, name, key, endpoint string, params url.Values) {
 	data, err, hit := s.cache.GetOrLoad(key, func() ([]byte, bool, error) {
-		// 请求 context 透传到上游：客户端断开时上游连接会一并释放。
-		body, fetchErr := s.up.FetchWithQuery(r.Context(), endpoint, params)
+		// 上游调用刻意脱离客户端 context：单飞会把同一 key 的并发请求合并到这一次
+		// 调用上，若让它跟随 leader 的 r.Context()，任何客户端断线都会连坐全部等待者
+		// （一起收到 408）。连接不泄漏由 upstream 侧的 defer res.Body.Close() 与
+		// 上游超时保证，并不依赖客户端取消；断线客户端反而会替同城用户预热缓存。
+		loadCtx := context.WithoutCancel(r.Context())
+		body, fetchErr := s.up.FetchWithQuery(loadCtx, endpoint, params)
 		if fetchErr != nil {
 			return nil, false, fetchErr
 		}
