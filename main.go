@@ -29,7 +29,9 @@ import (
 var webFS embed.FS
 
 func main() {
-	addr := flag.String("addr", ":8080", "HTTP 监听地址")
+	// 默认只监听回环：本服务无鉴权、无限流，绑全网卡会让同网段（含 WSL/容器所在的
+	// 虚拟网卡）任何进程都能无偿使用这个上游代理。需要局域网访问时显式传 -addr。
+	addr := flag.String("addr", "127.0.0.1:8080", "HTTP 监听地址（默认仅本机可访问，如要局域网访问填 :8080）")
 	cacheTTL := flag.Duration("cache-ttl", 10*time.Minute, "上游响应缓存时长，0 表示不缓存")
 	upstreamTimeout := flag.Duration("upstream-timeout", 8*time.Second, "单个上游请求超时")
 	logLevel := flag.String("log-level", "info", "日志级别：debug/info/warn/error")
