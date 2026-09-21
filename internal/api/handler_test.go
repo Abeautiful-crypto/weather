@@ -102,6 +102,34 @@ func TestServesEmbeddedIndex(t *testing.T) {
 	}
 }
 
+func TestStaticDirectoryListingIsDisabled(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := New(cache.New(time.Minute), upstream.New(time.Second, upstream.DefaultEndpoints()), logger)
+	static := fstest.MapFS{
+		"index.html":    &fstest.MapFile{Data: []byte("<title>weather</title>")},
+		"assets/app.js": &fstest.MapFile{Data: []byte("console.log(1)")},
+	}
+	ts := httptest.NewServer(srv.Routes(static))
+	t.Cleanup(ts.Close)
+
+	res := get(t, ts.URL+"/assets/")
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("目录访问应返回 404，实际 %d", res.StatusCode)
+	}
+	body, _ := io.ReadAll(res.Body)
+	if strings.Contains(string(body), "app.js") {
+		t.Fatalf("不应列出目录内容：%s", body)
+	}
+
+	// 目录禁用不能误伤静态文件本身
+	if res := get(t, ts.URL+"/assets/app.js"); res.StatusCode != http.StatusOK {
+		t.Fatalf("静态文件应仍可访问，实际 %d", res.StatusCode)
+	}
+	if res := get(t, ts.URL+"/"); res.StatusCode != http.StatusOK {
+		t.Fatalf("根路径应仍可访问，实际 %d", res.StatusCode)
+	}
+}
+
 func TestUnknownAPIPathReturnsJSON404(t *testing.T) {
 	base, _ := newEnv(t, time.Minute, time.Second, func(w http.ResponseWriter, r *http.Request) {})
 	res := get(t, base+"/api/nope")

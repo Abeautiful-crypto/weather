@@ -46,9 +46,29 @@ func (s *Server) Routes(static fs.FS) http.Handler {
 	// 未实现的 /api/* 一律返回 JSON 404，避免落到静态资源的首页兜底上。
 	mux.HandleFunc("/api/", s.handleAPINotFound)
 	if static != nil {
-		mux.Handle("/", http.FileServerFS(static))
+		mux.Handle("/", staticHandler(static))
 	}
 	return s.withLogging(mux)
+}
+
+// staticHandler 托管内嵌前端，并关掉 http.FileServerFS 的目录列表能力。
+//
+// 目录列表今天无害（web/ 下只有 index.html），但前端会持续演进：一旦出现
+// web/assets/ 这类子目录，`GET /assets/` 就会直接吐出文件清单。这里把以 "/" 结尾的
+// 路径（根路径除外）一律判为 404，使目录不可列举。
+//
+// 注意：静态 404 保持 http.NotFound 的 text/plain 形态，与 /api/* 的 JSON 404 有意
+// 不同——静态路径的访问者是浏览器，JSON 原文比 "404 page not found" 更难读，而静态
+// 路径不存在 API 消费者。这是刻意的不一致，不是漏改。
+func staticHandler(static fs.FS) http.Handler {
+	fileServer := http.FileServerFS(static)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" && strings.HasSuffix(r.URL.Path, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		fileServer.ServeHTTP(w, r)
+	})
 }
 
 /* ------------------------------------------------------------------ handlers */
