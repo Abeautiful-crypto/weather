@@ -1,0 +1,20 @@
+# 构建产物
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+weather
+weather-go/weather
+
+# 运行日志
+*.log
+*.err
+
+# 测试与覆盖率产物
+*.out
+coverage.html
+
+# 编辑器与系统
+.DS_Store
+Thumbs.db
