@@ -348,7 +348,8 @@
       </div>
 
       <p class="foot">
-        数据由 <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> 免费提供（无需 API Key），经本地 Go 服务代理与缓存<br>
+        天气数据由 <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> 免费提供（无需 API Key），经本地 Go 服务代理与缓存<br>
+        城市搜索可选用 <a href="https://www.qweather.com" target="_blank" rel="noopener">和风天气 QWeather</a>（服务端配置 QWEATHER_HOST / QWEATHER_KEY 后启用）<br>
         生活指数与出行建议由天气数据按规则推算，仅供参考
       </p>
     </div>
@@ -1110,7 +1111,7 @@
     state.suggestList = list;
     state.suggestIndex = -1;
     if (!list.length) {
-      ul.innerHTML = '<li class="empty">未找到相关城市：去掉省份只填城市名，或改用拼音（如 宿迁 → Suqian）</li>';
+      ul.innerHTML = '<li class="empty">未找到相关城市：试试只填城市名，或改用拼音（如 宿迁 → Suqian / Suzhou）</li>';
       ul.hidden = false;
       return;
     }

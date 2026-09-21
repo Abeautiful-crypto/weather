@@ -22,11 +22,20 @@ import (
 
 	"weather/internal/api"
 	"weather/internal/cache"
+	"weather/internal/qweather"
 	"weather/internal/upstream"
 )
 
 //go:embed web
 var webFS embed.FS
+
+// 和风天气凭据的环境变量名。用环境变量而不是 flag：Key 属于机密，
+// 出现在命令行里会进入 shell 历史与进程列表；Host 与 Key 成对出现，
+// 两者都配置齐才会启用和风，否则城市搜索自动回落 Open-Meteo。
+const (
+	envQWeatherHost = "QWEATHER_HOST"
+	envQWeatherKey  = "QWEATHER_KEY"
+)
 
 func main() {
 	// 默认只监听回环：本服务无鉴权、无限流，绑全网卡会让同网段（含 WSL/容器所在的
@@ -45,9 +54,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 城市搜索可选接入和风天气 GeoAPI：中文行政区覆盖比 GeoNames 完整（例如"宿迁"）。
+	// 凭据不完整时自动回落 Open-Meteo，保证"不配置也能一条命令跑起来"。
+	qwClient := newQWeatherClient(logger, *upstreamTimeout)
+
 	handler := api.New(
 		cache.New(*cacheTTL),
 		upstream.NewDefault(*upstreamTimeout),
+		qwClient,
 		logger,
 	).Routes(static)
 
@@ -84,6 +98,35 @@ func main() {
 		logger.Error("优雅关闭超时", "err", err)
 	}
 	logger.Info("服务已退出")
+}
+
+// newQWeatherClient 按环境变量创建和风客户端；凭据缺失或不完整时返回 nil，
+// 由 api 层回落到 Open-Meteo 的城市搜索。任何情况下都不打印 API Key。
+func newQWeatherClient(logger *slog.Logger, timeout time.Duration) *qweather.Client {
+	host := strings.TrimSpace(os.Getenv(envQWeatherHost))
+	key := strings.TrimSpace(os.Getenv(envQWeatherKey))
+
+	switch {
+	case host == "" && key == "":
+		logger.Info("城市搜索数据源：Open-Meteo",
+			"提示", "配置 "+envQWeatherHost+" 与 "+envQWeatherKey+" 可启用和风天气中文地名搜索")
+		return nil
+	case host == "" || key == "":
+		missing := envQWeatherHost
+		if host != "" {
+			missing = envQWeatherKey
+		}
+		logger.Warn("和风凭据不完整，城市搜索已回落 Open-Meteo", "缺少环境变量", missing)
+		return nil
+	}
+
+	client, err := qweather.New(qweather.Config{Host: host, APIKey: key, Timeout: timeout})
+	if err != nil {
+		logger.Warn("和风客户端初始化失败，城市搜索已回落 Open-Meteo", "err", err)
+		return nil
+	}
+	logger.Info("城市搜索数据源：和风天气 GeoAPI", "host", host)
+	return client
 }
 
 // shutdownTimeout 由 -upstream-timeout 推导，保证关停等待足以覆盖一次完整的

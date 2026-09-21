@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"weather/internal/cache"
+	"weather/internal/qweather"
 	"weather/internal/upstream"
 )
 
@@ -25,15 +26,16 @@ const maxQueryRunes = 64
 type Server struct {
 	cache  *cache.Cache
 	up     *upstream.Client
+	qw     *qweather.Client // 为 nil 表示未启用和风，城市搜索回落到 Open-Meteo
 	logger *slog.Logger
 }
 
-// New 创建 Server。
-func New(c *cache.Cache, up *upstream.Client, logger *slog.Logger) *Server {
+// New 创建 Server。qw 可为 nil（未配置和风凭据时城市搜索走 Open-Meteo 的候选降级路径）。
+func New(c *cache.Cache, up *upstream.Client, qw *qweather.Client, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{cache: c, up: up, logger: logger}
+	return &Server{cache: c, up: up, qw: qw, logger: logger}
 }
 
 // Routes 注册全部路由。static 为内嵌的前端静态资源文件系统（根目录下应有 index.html）。
@@ -94,12 +96,29 @@ func (s *Server) handleGeocode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 候选词由纯函数推导，因此缓存命中时也能如实告知本次尝试了哪些词
-	w.Header().Set("X-Geocode-Candidates", strings.Join(geocodeCandidates(q), ","))
+	ctx := context.WithoutCancel(r.Context())
+	var key string
+	if s.qw != nil {
+		// 和风：中文行政区覆盖更完整（宿迁这类在 GeoNames 中文索引里缺失的地名也能搜到）
+		w.Header().Set("X-Geocode-Source", "qweather")
+		key = "geocode:qweather:" + strings.ToLower(q)
+	} else {
+		// 回落路径：候选词由纯函数推导，因此缓存命中时也能如实告知尝试了哪些词
+		w.Header().Set("X-Geocode-Source", "open-meteo")
+		w.Header().Set("X-Geocode-Candidates", strings.Join(geocodeCandidates(q), ","))
+		key = "geocode:open-meteo:" + strings.ToLower(q)
+	}
 
-	key := "geocode:" + strings.ToLower(q)
 	data, err, hit := s.cache.GetOrLoad(key, func() ([]byte, bool, error) {
-		body, searchErr := s.searchPlaces(context.WithoutCancel(r.Context()), q)
+		var (
+			body      []byte
+			searchErr error
+		)
+		if s.qw != nil {
+			body, searchErr = s.searchPlacesQWeather(ctx, q)
+		} else {
+			body, searchErr = s.searchPlaces(ctx, q)
+		}
 		if searchErr != nil {
 			return nil, false, searchErr
 		}
@@ -189,6 +208,12 @@ func (s *Server) writeProxyError(w http.ResponseWriter, name string, err error) 
 	if errors.As(err, &upErr) {
 		s.logger.Warn("代理失败", "api", name, "status", upErr.Status, "err", upErr)
 		writeError(w, upErr.Status, upErr.Msg)
+		return
+	}
+	var qwErr *qweather.Error
+	if errors.As(err, &qwErr) {
+		s.logger.Warn("和风调用失败", "api", name, "status", qwErr.Status, "err", qwErr)
+		writeError(w, qwErr.Status, qwErr.Msg)
 		return
 	}
 	s.logger.Error("代理异常", "api", name, "err", err)

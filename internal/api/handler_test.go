@@ -45,7 +45,7 @@ func newEnv(t *testing.T, ttl, timeout time.Duration, up http.HandlerFunc) (base
 func newEnvWithEndpoints(t *testing.T, ttl, timeout time.Duration, eps upstream.Endpoints) string {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := New(cache.New(ttl), upstream.New(timeout, eps), logger)
+	srv := New(cache.New(ttl), upstream.New(timeout, eps), nil, logger)
 
 	static := fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("<!doctype html><title>weather</title>")},
@@ -104,7 +104,7 @@ func TestServesEmbeddedIndex(t *testing.T) {
 
 func TestStaticDirectoryListingIsDisabled(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := New(cache.New(time.Minute), upstream.New(time.Second, upstream.DefaultEndpoints()), logger)
+	srv := New(cache.New(time.Minute), upstream.New(time.Second, upstream.DefaultEndpoints()), nil, logger)
 	static := fstest.MapFS{
 		"index.html":    &fstest.MapFile{Data: []byte("<title>weather</title>")},
 		"assets/app.js": &fstest.MapFile{Data: []byte("console.log(1)")},

@@ -218,3 +218,47 @@ func (s *Server) searchPlaces(ctx context.Context, q string) ([]byte, error) {
 	}
 	return json.Marshal(map[string]any{"results": results})
 }
+
+// qweatherPlace 是和风 GeoAPI 结果映射后的形状。
+//
+// 字段名刻意与前端已经在用的 Open-Meteo 地理编码结构保持一致（name / latitude /
+// longitude / admin1 / country），所以切换搜索数据源不需要改动前端一行代码——
+// 前端只把 latitude/longitude 原样带进 /api/weather。
+type qweatherPlace struct {
+	Name      string  `json:"name"`
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+	Admin1    string  `json:"admin1"`
+	Admin2    string  `json:"admin2"`
+	Country   string  `json:"country"`
+	Source    string  `json:"source"`
+}
+
+// searchPlacesQWeather 调用和风 GeoAPI 并把结果映射成前端已有的结构。
+//
+// 和风返回的经纬度是字符串（如 "33.94917"），这里解析为数字；无法解析的条目直接丢弃，
+// 不让脏数据进前端。查无结果时返回 {"results":[]}，与 Open-Meteo 路径行为一致。
+func (s *Server) searchPlacesQWeather(ctx context.Context, q string) ([]byte, error) {
+	cities, err := s.qw.LookupCity(ctx, q, geocodeResultLimit)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]qweatherPlace, 0, len(cities))
+	for _, c := range cities {
+		lat, latErr := strconv.ParseFloat(c.Lat, 64)
+		lon, lonErr := strconv.ParseFloat(c.Lon, 64)
+		if latErr != nil || lonErr != nil {
+			continue
+		}
+		results = append(results, qweatherPlace{
+			Name:      c.Name,
+			Latitude:  lat,
+			Longitude: lon,
+			Admin1:    c.Adm1,
+			Admin2:    c.Adm2,
+			Country:   c.Country,
+			Source:    "qweather",
+		})
+	}
+	return json.Marshal(map[string]any{"results": results})
+}
