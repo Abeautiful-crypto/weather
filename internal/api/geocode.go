@@ -67,12 +67,37 @@ func geocodeCandidates(q string) []string {
 		// 拆出省名后剩下的才是城市名；此时不再给原词加「市」，因为「江苏宿迁市」
 		// 这种词上游不可能命中，纯属浪费一次请求。
 		add(rest)
+		add(trimAdminSuffix(rest))
 		add(withCitySuffix(rest))
 		return out
 	}
+	// 去掉行政区后缀的变体很关键：`淅川县` 在上游中文索引里查不到，
+	// 但 `淅川` 能命中「淅川(PPLA3 河南/南阳市)」。
+	add(trimAdminSuffix(q))
 	add(withCitySuffix(q))
 
 	return out
+}
+
+// trimAdminSuffix 去掉结尾的行政区后缀（淅川县 → 淅川）。
+// 剩余不足两个字时返回 ""，避免产出「唐」这类噪音候选。
+func trimAdminSuffix(s string) string {
+	runes := []rune(s)
+	if len(runes) < 3 {
+		return ""
+	}
+	last := string(runes[len(runes)-1])
+	for _, suf := range citySuffixes {
+		if last != suf {
+			continue
+		}
+		rest := string(runes[:len(runes)-1])
+		if len([]rune(rest)) < 2 {
+			return ""
+		}
+		return rest
+	}
+	return ""
 }
 
 // trimAdminPrefix 剥掉开头的省级名称并返回剩余部分；不匹配、剥完为空、
