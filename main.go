@@ -15,6 +15,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	// 内嵌 IANA 时区数据库。api 层用 time.LoadLocation 校验前端传来的 tz；若运行环境
+	// 缺少 zoneinfo（例如目标机器上没有 Go 的 GOROOT），校验会全部失败并静默回落到
+	// auto，使"时区与坐标解耦"这个前提失效。内嵌后行为与运行环境无关（仅标准库）。
+	_ "time/tzdata"
 
 	"weather/internal/api"
 	"weather/internal/cache"

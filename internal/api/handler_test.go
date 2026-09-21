@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/fstest"
@@ -198,11 +199,11 @@ func TestWeatherProxiesThenServesFromCache(t *testing.T) {
 			t.Errorf("上游路径不符：%s", r.URL.Path)
 		}
 		q := r.URL.Query()
-		if got := q.Get("latitude"); got != "39.9075" {
-			t.Errorf("latitude 应为 39.9075，实际 %q", got)
+		if got := q.Get("latitude"); got != "39.91" {
+			t.Errorf("latitude 应被量化到 2 位小数即 39.91，实际 %q", got)
 		}
-		if got := q.Get("longitude"); got != "116.3972" {
-			t.Errorf("longitude 应为 116.3972，实际 %q", got)
+		if got := q.Get("longitude"); got != "116.40" {
+			t.Errorf("longitude 应被量化到 2 位小数即 116.40，实际 %q", got)
 		}
 		if got := q.Get("forecast_days"); got != "7" {
 			t.Errorf("forecast_days 应为 7，实际 %q", got)
@@ -305,6 +306,91 @@ func TestInvalidJSONMapsTo502AndIsNotCached(t *testing.T) {
 	get(t, url) // 失败不缓存，重试仍应打到上游
 	if got := atomic.LoadInt32(calls); got != 2 {
 		t.Fatalf("不可解析的响应不应被缓存，上游应被调用 2 次，实际 %d 次", got)
+	}
+}
+
+// tz 必须转发给上游并纳入缓存键：同一坐标不同时区互不串味；非法 tz 回落 auto，
+// 且不会因为字符串不同而产生新缓存键（否则任意字符串都能撑大缓存键空间）。
+func TestTZIsForwardedAndPartitionsCache(t *testing.T) {
+	var mu sync.Mutex
+	var lastTZ string
+	base, calls := newEnv(t, time.Minute, time.Second, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		lastTZ = r.URL.Query().Get("timezone")
+		mu.Unlock()
+		_, _ = io.WriteString(w, validForecast)
+	})
+	tzSeen := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return lastTZ
+	}
+
+	shanghai := base + "/api/weather?lat=39.9&lon=116.4&tz=Asia%2FShanghai"
+
+	if res := get(t, shanghai); res.Header.Get("X-Cache") != "MISS" {
+		t.Fatalf("首次请求应为 MISS，实际 %q", res.Header.Get("X-Cache"))
+	}
+	if got := tzSeen(); got != "Asia/Shanghai" {
+		t.Fatalf("tz 应转发给上游，实际 timezone=%q", got)
+	}
+
+	// 同坐标不同时区 → 缓存必须隔离
+	if res := get(t, base+"/api/weather?lat=39.9&lon=116.4&tz=UTC"); res.Header.Get("X-Cache") != "MISS" {
+		t.Fatalf("不同 tz 不应命中同一缓存条目，实际 %q", res.Header.Get("X-Cache"))
+	}
+	if got := tzSeen(); got != "UTC" {
+		t.Fatalf("timezone 应为 UTC，实际 %q", got)
+	}
+
+	// 同时区重复请求 → 命中
+	if res := get(t, shanghai); res.Header.Get("X-Cache") != "HIT" {
+		t.Fatalf("同 tz 重复请求应命中，实际 %q", res.Header.Get("X-Cache"))
+	}
+
+	// 缺省 tz → auto
+	if res := get(t, base+"/api/weather?lat=39.9&lon=116.4"); res.Header.Get("X-Cache") != "MISS" {
+		t.Fatalf("首次缺省 tz 应为 MISS，实际 %q", res.Header.Get("X-Cache"))
+	}
+	if got := tzSeen(); got != "auto" {
+		t.Fatalf("缺省 tz 应回落 auto，实际 %q", got)
+	}
+
+	// 非法 tz → 回落 auto，并复用同一条 auto 缓存（不产生新键）
+	if res := get(t, base+"/api/weather?lat=39.9&lon=116.4&tz=Not%2FAZone"); res.Header.Get("X-Cache") != "HIT" {
+		t.Fatalf("非法 tz 应回落 auto 并命中既有条目，实际 %q", res.Header.Get("X-Cache"))
+	}
+
+	if got := atomic.LoadInt32(calls); got != 3 {
+		t.Fatalf("上游应只被调用 3 次（auto / Asia/Shanghai / UTC），实际 %d 次", got)
+	}
+}
+
+// 同一城市不同设备的 GPS 坐标会漂移数百米；量化到 2 位小数后应共享同一条缓存，
+// 这才是"提升命中率"真正生效的路径。同时确认量化没有把明显不同的坐标准确化到一起。
+func TestCoordQuantizationSharesCacheEntry(t *testing.T) {
+	base, calls := newEnv(t, time.Minute, time.Second, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, validForecast)
+	})
+
+	// 两点相距约 50m
+	deviceA := base + "/api/weather?lat=39.90751&lon=116.39723"
+	deviceB := base + "/api/weather?lat=39.90799&lon=116.39751"
+
+	if res := get(t, deviceA); res.Header.Get("X-Cache") != "MISS" {
+		t.Fatalf("设备 A 首次应为 MISS，实际 %q", res.Header.Get("X-Cache"))
+	}
+	if res := get(t, deviceB); res.Header.Get("X-Cache") != "HIT" {
+		t.Fatalf("设备 B 的坐标量化后应命中同一条缓存，实际 %q", res.Header.Get("X-Cache"))
+	}
+
+	// 明显不同的坐标不得被合并
+	if res := get(t, base+"/api/weather?lat=39.95&lon=116.45"); res.Header.Get("X-Cache") != "MISS" {
+		t.Fatalf("明显不同的坐标不应命中，实际 %q", res.Header.Get("X-Cache"))
+	}
+
+	if got := atomic.LoadInt32(calls); got != 2 {
+		t.Fatalf("上游应被调用 2 次，实际 %d 次", got)
 	}
 }
 

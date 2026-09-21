@@ -571,14 +571,25 @@
     });
   }
 
+  /* 把浏览器真实时区告诉后端：后端据此替代 timezone=auto，使"时区"不再由坐标推导。
+     这是坐标可以量化到公里级的前提（量化后的坐标不再保证落在原时区边界内）。 */
+  function tzQuery() {
+    try {
+      var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      return tz ? '&tz=' + encodeURIComponent(tz) : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
   function fetchWeather(place) {
     return getJSON('/api/weather?lat=' + encodeURIComponent(place.latitude) +
-                   '&lon=' + encodeURIComponent(place.longitude));
+                   '&lon=' + encodeURIComponent(place.longitude) + tzQuery());
   }
 
   function fetchAir(place) {
     return getJSON('/api/air?lat=' + encodeURIComponent(place.latitude) +
-                   '&lon=' + encodeURIComponent(place.longitude));
+                   '&lon=' + encodeURIComponent(place.longitude) + tzQuery());
   }
 
   /* ============================================================

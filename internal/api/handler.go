@@ -94,10 +94,11 @@ func (s *Server) handleWeather(w http.ResponseWriter, r *http.Request) {
 	params.Set("current", "temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m")
 	params.Set("hourly", "temperature_2m,precipitation_probability,weather_code")
 	params.Set("daily", "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max")
-	params.Set("timezone", "auto")
+	tz := parseTZ(r)
+	params.Set("timezone", tz)
 	params.Set("forecast_days", "7")
 
-	s.proxy(w, r, "weather", coordKey("weather", lat, lon), s.up.Endpoints().Forecast, params)
+	s.proxy(w, r, "weather", coordKey("weather", lat, lon, tz), s.up.Endpoints().Forecast, params)
 }
 
 func (s *Server) handleAir(w http.ResponseWriter, r *http.Request) {
@@ -110,10 +111,11 @@ func (s *Server) handleAir(w http.ResponseWriter, r *http.Request) {
 	params := url.Values{}
 	params.Set("latitude", formatCoord(lat))
 	params.Set("longitude", formatCoord(lon))
+	tz := parseTZ(r)
 	params.Set("current", "pm2_5,pm10,us_aqi")
-	params.Set("timezone", "auto")
+	params.Set("timezone", tz)
 
-	s.proxy(w, r, "air", coordKey("air", lat, lon), s.up.Endpoints().Air, params)
+	s.proxy(w, r, "air", coordKey("air", lat, lon, tz), s.up.Endpoints().Air, params)
 }
 
 /* ------------------------------------------------------------------ helpers */
@@ -192,13 +194,37 @@ func parseCoord(r *http.Request) (lat, lon float64, errMsg string) {
 	return lat, lon, ""
 }
 
-// formatCoord 统一经纬度格式，保证缓存键稳定。
+// coordPrecision 是坐标量化精度（小数位数）。2 位小数约 1.1km，与上游天气模型的
+// 网格尺度（公里级）相当。刻意不保留更高精度：GPS 坐标在同一城市内不同设备之间会
+// 漂移数百米，保留 4 位小数（约 11m）会让缓存键几乎无法跨设备复用，命中率趋近于 0，
+// 而天气结果并无差别。
+const coordPrecision = 2
+
+// formatCoord 把坐标量化到 coordPrecision 位小数，并同时用于上游入参与缓存键，
+// 保证"同一个量化坐标"始终指向同一条缓存与同一个上游网格。
 func formatCoord(v float64) string {
-	return strconv.FormatFloat(v, 'f', 4, 64)
+	return strconv.FormatFloat(v, 'f', coordPrecision, 64)
 }
 
-func coordKey(name string, lat, lon float64) string {
-	return fmt.Sprintf("%s:%s:%s", name, formatCoord(lat), formatCoord(lon))
+func coordKey(name string, lat, lon float64, tz string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", name, formatCoord(lat), formatCoord(lon), tz)
+}
+
+// parseTZ 解析并校验 tz 参数；缺失或非法一律回落 "auto"（交由上游按坐标判断）。
+//
+// tz 由浏览器提供（Intl.DateTimeFormat().resolvedOptions().timeZone），让"时区"与
+// "坐标"解耦——这正是坐标可以放心量化到 1km 的前提。必须用 time.LoadLocation 校验后
+// 才写入缓存键：否则任意字符串都能构造出新键，仅凭一个坐标就能把缓存键空间无限撑大。
+func parseTZ(r *http.Request) string {
+	raw := strings.TrimSpace(r.URL.Query().Get("tz"))
+	if raw == "" {
+		return "auto"
+	}
+	loc, err := time.LoadLocation(raw)
+	if err != nil {
+		return "auto"
+	}
+	return loc.String()
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
