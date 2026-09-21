@@ -25,13 +25,14 @@ type call struct {
 
 // Cache 是并发安全的内存缓存。返回的 []byte 为共享只读切片，调用方不得修改。
 type Cache struct {
-	mu       sync.Mutex
-	items    map[string]*entry
-	inflight map[string]*call
-	ttl      time.Duration
-	now      func() time.Time
-	hits     int64
-	misses   int64
+	mu        sync.Mutex
+	items     map[string]*entry
+	inflight  map[string]*call
+	ttl       time.Duration
+	now       func() time.Time
+	hits      int64
+	misses    int64
+	coalesced int64
 }
 
 // New 创建一个 TTL 为 ttl 的缓存；ttl <= 0 表示永不写入缓存（但仍会合并并发请求）。
@@ -68,7 +69,7 @@ func (c *Cache) GetOrLoad(key string, load LoadFunc) (data []byte, err error, hi
 		delete(c.items, key) // 过期惰性删除
 	}
 	if cl, ok := c.inflight[key]; ok {
-		c.misses++
+		c.coalesced++
 		c.mu.Unlock()
 		cl.wg.Wait()
 		return cl.data, cl.err, false
@@ -101,9 +102,15 @@ func (c *Cache) Len() int {
 	return len(c.items)
 }
 
-// Stats 返回累计的命中与未命中次数。
-func (c *Cache) Stats() (hits, misses int64) {
+// Stats 返回累计的命中、未命中与被合并的次数。三者互斥，且 hits+misses+coalesced
+// 等于 GetOrLoad 的调用次数：
+//   - hits      命中缓存，未触发 load
+//   - misses    真正触发了 load（并发时只有一个 leader 计入）
+//   - coalesced 等待了同 key 已有的加载，是单飞实际节省掉的上游调用数
+//
+// coalesced 也是测试用来确定"等待者已全部登记"的观测点，避免用 sleep 猜时序。
+func (c *Cache) Stats() (hits, misses, coalesced int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.hits, c.misses
+	return c.hits, c.misses, c.coalesced
 }
