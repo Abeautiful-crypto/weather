@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"weather/internal/amap"
 	"weather/internal/cache"
 	"weather/internal/qweather"
 	"weather/internal/upstream"
@@ -24,18 +25,22 @@ const maxQueryRunes = 64
 
 // Server 持有依赖，便于在测试中替换。
 type Server struct {
-	cache  *cache.Cache
-	up     *upstream.Client
-	qw     *qweather.Client // 为 nil 表示未启用和风，城市搜索回落到 Open-Meteo
+	cache *cache.Cache
+	up    *upstream.Client
+	// am 为 nil 表示未配置高德：城市搜索退到下一路，定位取名不可用。
+	am *amap.Client
+	// qw 为 nil 表示未启用和风：城市搜索继续回落到 Open-Meteo。
+	qw     *qweather.Client
 	logger *slog.Logger
 }
 
-// New 创建 Server。qw 可为 nil（未配置和风凭据时城市搜索走 Open-Meteo 的候选降级路径）。
-func New(c *cache.Cache, up *upstream.Client, qw *qweather.Client, logger *slog.Logger) *Server {
+// New 创建 Server。am 与 qw 均可为 nil：城市搜索按「高德 → 和风 → Open-Meteo」
+// 依次回落，保证"不配置任何凭据也能一条命令跑起来"。
+func New(c *cache.Cache, up *upstream.Client, am *amap.Client, qw *qweather.Client, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{cache: c, up: up, qw: qw, logger: logger}
+	return &Server{cache: c, up: up, am: am, qw: qw, logger: logger}
 }
 
 // Routes 注册全部路由。static 为内嵌的前端静态资源文件系统（根目录下应有 index.html）。
@@ -43,6 +48,7 @@ func (s *Server) Routes(static fs.FS) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/geocode", s.handleGeocode)
+	mux.HandleFunc("GET /api/regeo", s.handleRegeo)
 	mux.HandleFunc("GET /api/weather", s.handleWeather)
 	mux.HandleFunc("GET /api/air", s.handleAir)
 	// 未实现的 /api/* 一律返回 JSON 404，避免落到静态资源的首页兜底上。
@@ -83,8 +89,74 @@ func (s *Server) handleAPINotFound(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, fmt.Sprintf("接口不存在：%s", r.URL.Path))
 }
 
-// handleGeocode 不复用 proxy：它需要先做候选降级与重排序（见 geocode.go），
-// 因此这里单独走一遍流程，但复用同一套错误与响应辅助函数。
+// geocodeSource 是城市搜索的一路数据源。
+type geocodeSource struct {
+	name string
+	key  string
+	// addressParser 表示这一路做的是"地址解析"而不是"地名搜索"。
+	//
+	// 只有高德属于前者：解析不出目标地名时它会退化成"字面同名的低级别结果"
+	// （实测 东京 / Tokyo → 返回 6 条 level=村庄 的「…平南县东京」），所以它的结果
+	// 需要按行政级别筛一遍；和风与 Open-Meteo 都是地名搜索，结果直接采用。
+	addressParser bool
+	load          func() ([]byte, error)
+}
+
+// geocodeSources 按优先级返回可用的数据源：高德 → 和风 → Open-Meteo。
+// Open-Meteo 免 Key，永远在列，因此"不配置任何凭据也能跑起来"始终成立。
+func (s *Server) geocodeSources(ctx context.Context, q string) []geocodeSource {
+	lower := strings.ToLower(q)
+	out := make([]geocodeSource, 0, 3)
+	if s.am != nil {
+		out = append(out, geocodeSource{
+			name: "amap", key: "geocode:amap:" + lower, addressParser: true,
+			load: func() ([]byte, error) { return s.searchPlacesAMap(ctx, q) },
+		})
+	}
+	if s.qw != nil {
+		out = append(out, geocodeSource{
+			name: "qweather", key: "geocode:qweather:" + lower,
+			load: func() ([]byte, error) { return s.searchPlacesQWeather(ctx, q) },
+		})
+	}
+	out = append(out, geocodeSource{
+		name: "open-meteo", key: "geocode:open-meteo:" + lower,
+		load: func() ([]byte, error) { return s.searchPlaces(ctx, q) },
+	})
+	return out
+}
+
+// geocodeHit 记录某一路的搜索结果，用于在回落链上延迟决策。
+type geocodeHit struct {
+	src  geocodeSource
+	data []byte
+	hit  bool
+}
+
+// writeGeocode 输出最终选中的那一路结果（含来源标记与候选词头）。
+func (s *Server) writeGeocode(w http.ResponseWriter, q string, h geocodeHit) {
+	w.Header().Set("X-Geocode-Source", h.src.name)
+	if h.src.name == "open-meteo" {
+		// 候选词由纯函数推导，因此缓存命中时也能如实告知尝试了哪些词
+		w.Header().Set("X-Geocode-Candidates", strings.Join(geocodeCandidates(q), ","))
+	}
+	s.writeCachedJSON(w, "geocode", h.src.key, h.data, h.hit)
+}
+
+// handleGeocode 按「高德 → 和风 → Open-Meteo」依次尝试，遵守两条规则：
+//
+//  1. **报错不回落**：这一路报错就直接返回错误。高德的错误几乎都是配置问题
+//     （Key 无效、平台不匹配、IP 白名单、额度超限），静默回落到 Open-Meteo 会让
+//     这些问题永远暴露不出来，用户只会觉得"结果有点怪"。
+//  2. **空结果与弱结果继续回落**：
+//     - 空结果：高德以中国大陆为主，不回落的话搜海外城市会从"能用"退化成"搜不到"；
+//     - 弱结果：高德是地址解析，解析不到目标时会给出一堆字面同名的村庄级结果
+//     （实测 东京 / Tokyo → 6 条 level=村庄），这类结果不能挡住后面正确的地名搜索。
+//
+// 弱结果不会被无条件丢掉，但只在"后面每一路都没有结果"时才被返回。实测代价：
+// 搜"三元村"时高德给出 10 条同名村庄，而 GeoNames 也能给出同名乡镇，最终采用后者
+// ——代价可接受（两者都是真实存在的地点，且后者行政级别更高），换来的是
+// Tokyo / 东京 这类"高德只能给出字面同名村庄"的查询能得到正确的海外答案。
 func (s *Server) handleGeocode(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
@@ -97,38 +169,51 @@ func (s *Server) handleGeocode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := context.WithoutCancel(r.Context())
-	var key string
-	if s.qw != nil {
-		// 和风：中文行政区覆盖更完整（宿迁这类在 GeoNames 中文索引里缺失的地名也能搜到）
-		w.Header().Set("X-Geocode-Source", "qweather")
-		key = "geocode:qweather:" + strings.ToLower(q)
-	} else {
-		// 回落路径：候选词由纯函数推导，因此缓存命中时也能如实告知尝试了哪些词
-		w.Header().Set("X-Geocode-Source", "open-meteo")
-		w.Header().Set("X-Geocode-Candidates", strings.Join(geocodeCandidates(q), ","))
-		key = "geocode:open-meteo:" + strings.ToLower(q)
-	}
+	sources := s.geocodeSources(ctx, q)
 
-	data, err, hit := s.cache.GetOrLoad(key, func() ([]byte, bool, error) {
-		var (
-			body      []byte
-			searchErr error
-		)
-		if s.qw != nil {
-			body, searchErr = s.searchPlacesQWeather(ctx, q)
-		} else {
-			body, searchErr = s.searchPlaces(ctx, q)
+	var (
+		weak *geocodeHit
+		// 兜底值：所有数据源都返回空结果时用它（最后一个源的 key 也是这一条）
+		empty = geocodeHit{src: sources[len(sources)-1]}
+	)
+
+	for i, src := range sources {
+		data, err, hit := s.cache.GetOrLoad(src.key, func() ([]byte, bool, error) {
+			body, loadErr := src.load()
+			if loadErr != nil {
+				return nil, false, loadErr
+			}
+			return body, json.Valid(body), nil
+		})
+		if err != nil {
+			s.writeProxyError(w, "geocode", err)
+			return
 		}
-		if searchErr != nil {
-			return nil, false, searchErr
+
+		// "有没有结果""结果强不强"都由可缓存的 body 决定，因此回落在缓存命中时
+		// 同样成立，不会因为重试而重复打上游。
+		if resultCount(data) == 0 {
+			empty = geocodeHit{src: src, data: data, hit: hit}
+			continue
 		}
-		return body, json.Valid(body), nil
-	})
-	if err != nil {
-		s.writeProxyError(w, "geocode", err)
+		// 地址解析类数据源（高德）的弱结果先记下、继续往下试；非地址解析的数据源
+		// 结果就是它的答案，不做级别判断（和风的结果甚至不带 level 字段）。
+		if src.addressParser && !hasAdministrativeMatch(data) && i < len(sources)-1 {
+			if weak == nil {
+				weak = &geocodeHit{src: src, data: data, hit: hit}
+			}
+			continue
+		}
+
+		s.writeGeocode(w, q, geocodeHit{src: src, data: data, hit: hit})
 		return
 	}
-	s.writeCachedJSON(w, "geocode", key, data, hit)
+
+	if weak != nil {
+		s.writeGeocode(w, q, *weak)
+		return
+	}
+	s.writeGeocode(w, q, empty)
 }
 
 func (s *Server) handleWeather(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +226,7 @@ func (s *Server) handleWeather(w http.ResponseWriter, r *http.Request) {
 	params := url.Values{}
 	params.Set("latitude", formatCoord(lat))
 	params.Set("longitude", formatCoord(lon))
-	params.Set("current", "temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m")
+	params.Set("current", "temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m,wind_direction_10m")
 	params.Set("hourly", "temperature_2m,precipitation_probability,weather_code")
 	params.Set("daily", "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max")
 	tz := parseTZ(r)
@@ -208,6 +293,13 @@ func (s *Server) writeProxyError(w http.ResponseWriter, name string, err error) 
 	if errors.As(err, &upErr) {
 		s.logger.Warn("代理失败", "api", name, "status", upErr.Status, "err", upErr)
 		writeError(w, upErr.Status, upErr.Msg)
+		return
+	}
+	var amErr *amap.Error
+	if errors.As(err, &amErr) {
+		// amap.Error 的字符串已在包内脱敏，可以安全落日志。
+		s.logger.Warn("高德调用失败", "api", name, "status", amErr.Status, "err", amErr)
+		writeError(w, amErr.Status, amErr.Msg)
 		return
 	}
 	var qwErr *qweather.Error

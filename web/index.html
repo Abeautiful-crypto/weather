@@ -7,14 +7,17 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='88'%3E%E2%9B%85%3C/text%3E%3C/svg%3E">
 <style>
   :root{
-    --c1:#0b2545; --c2:#0f4c81; --c3:#2b7fb8;
-    --glass:rgba(255,255,255,.07);
-    --glass-strong:rgba(255,255,255,.12);
-    --line:rgba(255,255,255,.14);
-    --txt:#eef4ff;
-    --txt-dim:rgba(238,244,255,.66);
-    --txt-faint:rgba(238,244,255,.45);
-    --radius:20px;
+    --c1:#10151c; --c2:#1a2430; --c3:#253243;
+    --cloud:.2;            /* 云层浓度，随天气变化 */
+    --sun:0;               /* 太阳，仅白天晴天 = 1 */
+    --night:0;             /* 月亮与星星，仅晴夜 = 1 */
+    --card:rgba(255,255,255,.035);
+    --card-strong:rgba(255,255,255,.06);
+    --line:rgba(255,255,255,.09);
+    --txt:#e7ecf2;
+    --txt-dim:rgba(231,236,242,.66);
+    --txt-faint:rgba(231,236,242,.44);
+    --radius:12px;
   }
   *{box-sizing:border-box}
   [hidden]{display:none !important}
@@ -23,17 +26,116 @@
     margin:0;
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
     color:var(--txt);
-    background:#05080f;
+    background:#0d1117;
     -webkit-font-smoothing:antialiased;
   }
-  .bg{
-    position:fixed; inset:0; z-index:-1;
+
+  /* ---------- 动态背景：分层 ----------
+     五层各司其职：sky 大色域 / glow 阳光 / cloud 云层 / fx 降水粒子 / flash 闪电。
+     全部 fixed 且不接收指针事件，因此不参与布局，也不影响滚动与点击。 */
+  .bg{position:fixed; inset:0; z-index:-1; overflow:hidden; pointer-events:none; background:#0d1117}
+  .bg>*{position:absolute; inset:0}
+
+  /* 天空主色域：保留原有三层渐变结构，放大色域范围让天气之间的色相差异看得出来 */
+  .bg-sky{
     background:
-      radial-gradient(1100px 620px at 12% -10%, var(--c3) 0%, transparent 62%),
-      radial-gradient(900px 520px at 105% 108%, var(--c2) 0%, transparent 66%),
-      linear-gradient(158deg, var(--c1) 0%, #05080f 88%);
-    transition:background 900ms ease;
+      radial-gradient(120% 82% at 12% -10%, var(--c3) 0%, transparent 60%),
+      radial-gradient(100% 72% at 105% 108%, var(--c2) 0%, transparent 64%),
+      linear-gradient(158deg, var(--c1) 0%, #0d1117 92%);
+    transition:background 700ms ease;
   }
+
+  /* 云层：多层径向渐变模糊成软云，缓慢横移；厚度由 --cloud 决定 */
+  .bg-cloud{
+    opacity:var(--cloud);
+    transition:opacity 900ms ease;
+    filter:blur(40px);
+    background:
+      radial-gradient(closest-side, rgba(255,255,255,.55), transparent 72%) 14% 24%/48% 32% no-repeat,
+      radial-gradient(closest-side, rgba(214,228,246,.46), transparent 74%) 64% 12%/54% 36% no-repeat,
+      radial-gradient(closest-side, rgba(188,206,232,.38), transparent 76%) 88% 46%/46% 30% no-repeat;
+    animation:cloudDrift 38s ease-in-out infinite;
+  }
+  @keyframes cloudDrift{
+    0%{transform:translate3d(-5%,0,0)}
+    50%{transform:translate3d(5%,-1.4%,0)}
+    100%{transform:translate3d(-5%,0,0)}
+  }
+
+  /* 太阳：盘面 + 缓慢旋转的光芒。做得"看得出来"是刻意的——之前的氛围太含蓄，
+     用户反馈"动态效果呢？"，所以晴天必须有明确的太阳，雨天必须有明确的雨。 */
+  .bg-sun{opacity:var(--sun); transition:opacity 900ms ease}
+  .bg-sun::before{
+    content:''; position:absolute; left:74%; top:9%;
+    width:480px; height:480px; transform:translate(-50%,-50%);
+    border-radius:50%;
+    background:repeating-conic-gradient(from 0deg, rgba(255,214,140,.20) 0deg 7deg, transparent 7deg 16deg);
+    -webkit-mask-image:radial-gradient(closest-side, #000 28%, transparent 72%);
+    mask-image:radial-gradient(closest-side, #000 28%, transparent 72%);
+    animation:sunSpin 110s linear infinite;
+  }
+  .bg-sun::after{
+    content:''; position:absolute; left:74%; top:9%;
+    width:180px; height:180px; transform:translate(-50%,-50%);
+    border-radius:50%;
+    background:radial-gradient(circle, #fff8e6 0%, #ffe2a1 40%, rgba(255,201,110,.45) 66%, transparent 76%);
+    animation:sunPulse 7s ease-in-out infinite;
+  }
+  @keyframes sunSpin{
+    from{transform:translate(-50%,-50%) rotate(0deg)}
+    to{transform:translate(-50%,-50%) rotate(360deg)}
+  }
+  @keyframes sunPulse{
+    0%,100%{transform:translate(-50%,-50%) scale(1)}
+    50%{transform:translate(-50%,-50%) scale(1.07)}
+  }
+
+  /* 晴夜：满月 + 微微闪烁的星星 */
+  .bg-night{opacity:var(--night); transition:opacity 900ms ease}
+  .bg-night::before{
+    content:''; position:absolute; inset:0;
+    background-image:
+      radial-gradient(1.6px 1.6px at 10% 16%, rgba(255,255,255,.95), transparent 60%),
+      radial-gradient(1.2px 1.2px at 22% 7%,  rgba(255,255,255,.75), transparent 60%),
+      radial-gradient(1.5px 1.5px at 34% 22%, rgba(255,255,255,.85), transparent 60%),
+      radial-gradient(1.1px 1.1px at 47% 5%,  rgba(255,255,255,.65), transparent 60%),
+      radial-gradient(1.6px 1.6px at 58% 18%, rgba(255,255,255,.9),  transparent 60%),
+      radial-gradient(1.2px 1.2px at 66% 6%,  rgba(255,255,255,.7),  transparent 60%),
+      radial-gradient(1.5px 1.5px at 79% 24%, rgba(255,255,255,.8),  transparent 60%),
+      radial-gradient(1.2px 1.2px at 90% 12%, rgba(255,255,255,.75), transparent 60%),
+      radial-gradient(1.3px 1.3px at 16% 34%, rgba(255,255,255,.6),  transparent 60%),
+      radial-gradient(1.4px 1.4px at 88% 38%, rgba(255,255,255,.65), transparent 60%);
+    animation:starTwinkle 5s ease-in-out infinite alternate;
+  }
+  .bg-night::after{
+    content:''; position:absolute; left:80%; top:12%;
+    width:120px; height:120px; transform:translate(-50%,-50%);
+    border-radius:50%;
+    background:radial-gradient(circle at 36% 34%, #fdfbf0 0%, #ece7d2 55%, rgba(206,200,176,.3) 74%, transparent 80%);
+  }
+  @keyframes starTwinkle{
+    from{opacity:.55}
+    to{opacity:1}
+  }
+
+  /* 降水粒子：由 canvas 绘制（见脚本区），这里只负责定位与层叠 */
+  .bg-fx{display:block}
+
+  /* 闪电：仅雷暴时由脚本添加 .on */
+  .bg-flash{background:#dce7ff; mix-blend-mode:screen; opacity:0}
+  @keyframes flashBolt{
+    0%{opacity:.58}
+    26%{opacity:0}
+    42%{opacity:.4}
+    100%{opacity:0}
+  }
+  .bg-flash.on{animation:flashBolt 300ms ease-out 1}
+
+  /* 无障碍：系统开启"减少动效"时，所有背景动画停止（仍随天气换色） */
+  @media (prefers-reduced-motion: reduce){
+    .bg-sky, .bg-glow, .bg-cloud, .bg-flash, .bg-sun, .bg-night{animation:none !important}
+  }
+
   .app{max-width:980px; margin:0 auto; padding:22px 18px 56px}
 
   /* ---------- 顶栏 ---------- */
@@ -42,13 +144,12 @@
   .search-wrap>svg{position:absolute; left:13px; top:50%; transform:translateY(-50%); width:16px; height:16px; opacity:.55; pointer-events:none}
   #searchInput{
     width:100%; height:44px; padding:0 40px 0 38px;
-    border-radius:14px; border:1px solid var(--line);
-    background:var(--glass); color:var(--txt); font-size:15px;
-    backdrop-filter:blur(16px) saturate(140%); -webkit-backdrop-filter:blur(16px) saturate(140%);
+    border-radius:10px; border:1px solid var(--line);
+    background:var(--card); color:var(--txt); font-size:15px;
     outline:none; transition:border-color .2s, background .2s;
   }
   #searchInput::placeholder{color:var(--txt-faint)}
-  #searchInput:focus{border-color:rgba(255,255,255,.42); background:var(--glass-strong)}
+  #searchInput:focus{border-color:rgba(255,255,255,.28); background:var(--card-strong)}
   .clear-btn{
     position:absolute; right:8px; top:50%; transform:translateY(-50%);
     width:26px; height:26px; border-radius:50%; border:0; cursor:pointer;
@@ -58,47 +159,48 @@
   .suggest{
     position:absolute; z-index:20; top:calc(100% + 8px); left:0; right:0;
     margin:0; padding:6px; list-style:none;
-    border-radius:16px; border:1px solid var(--line);
-    background:rgba(16,22,36,.92); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
-    box-shadow:0 22px 50px rgba(0,0,0,.5);
+    border-radius:10px; border:1px solid var(--line);
+    background:#141a22;
+    box-shadow:0 12px 28px rgba(0,0,0,.4);
     max-height:290px; overflow:auto;
   }
   .suggest li{
     display:flex; align-items:center; gap:8px;
-    padding:10px 12px; border-radius:11px; cursor:pointer; font-size:14px;
+    padding:10px 12px; border-radius:8px; cursor:pointer; font-size:14px;
   }
   .suggest li .s-name{font-weight:600}
   .suggest li .s-sub{color:var(--txt-faint); font-size:12.5px}
   /* 低置信度级别标注：同名村镇很多，标出来避免被误当成县级行政区选中 */
   .suggest li .s-level{
     padding:1px 6px; border-radius:6px; font-size:11px; line-height:1.6;
-    color:#ffd9a0; background:rgba(255,170,60,.18); border:1px solid rgba(255,170,60,.34);
+    color:var(--txt-dim); background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.16);
   }
-  .suggest li.active, .suggest li:hover{background:rgba(255,255,255,.12)}
+  .suggest li.active, .suggest li:hover{background:rgba(255,255,255,.08)}
   .suggest li.empty{cursor:default; color:var(--txt-faint); justify-content:center}
   .suggest li.empty:hover{background:transparent}
   .controls{display:flex; gap:8px; align-items:center}
   .icon-btn, .pill-btn{
-    height:44px; border-radius:14px; border:1px solid var(--line);
-    background:var(--glass); color:var(--txt); cursor:pointer; font-size:14px;
-    backdrop-filter:blur(16px) saturate(140%); -webkit-backdrop-filter:blur(16px) saturate(140%);
+    height:44px; border-radius:10px; border:1px solid var(--line);
+    background:var(--card); color:var(--txt); cursor:pointer; font-size:14px;
     transition:background .2s, transform .12s;
   }
-  .icon-btn{width:44px; font-size:17px}
+  .icon-btn{width:44px}
+  .icon-btn svg{width:18px; height:18px; display:block; margin:0 auto}
+  #soundBtn .ic-sound-off{display:none}
+  #soundBtn[aria-pressed="true"] .ic-sound-on{display:none}
+  #soundBtn[aria-pressed="true"] .ic-sound-off{display:block}
   .pill-btn{padding:0 14px; min-width:62px; font-variant-numeric:tabular-nums}
-  .icon-btn:hover, .pill-btn:hover{background:var(--glass-strong)}
+  .icon-btn:hover, .pill-btn:hover{background:var(--card-strong)}
   .icon-btn:active, .pill-btn:active{transform:scale(.96)}
   .icon-btn.busy{opacity:.55; cursor:progress}
 
   /* ---------- 卡片通用 ---------- */
   .card{
-    border-radius:var(--radius); border:1px solid var(--line);
-    background:var(--glass);
-    backdrop-filter:blur(18px) saturate(145%); -webkit-backdrop-filter:blur(18px) saturate(145%);
-    box-shadow:0 18px 44px rgba(0,0,0,.32);
+    border-radius:var(--radius); border:1px solid rgba(255,255,255,.08);
+    background:var(--card);
     padding:20px;
   }
-  .card-title{display:flex; align-items:center; gap:8px; margin:0 0 14px; font-size:15px; font-weight:600; letter-spacing:.3px; color:var(--txt-dim)}
+  .card-title{display:flex; align-items:center; gap:8px; margin:0 0 14px; font-size:14px; font-weight:600; letter-spacing:.5px; color:var(--txt-dim)}
   .stack{display:grid; gap:16px; margin-top:16px}
   .stack>*{min-width:0}
   .grid-2{display:grid; grid-template-columns:1fr 1fr; gap:16px}
@@ -108,11 +210,10 @@
   .alert-bar{
     display:flex; gap:12px; align-items:flex-start;
     padding:14px 16px; margin-bottom:16px;
-    border-radius:16px; border:1px solid rgba(255,186,94,.45);
-    background:linear-gradient(100deg, rgba(255,150,60,.24), rgba(255,90,60,.14));
-    backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+    border-radius:10px; border:1px solid rgba(255,186,94,.35);
+    background:rgba(255,150,60,.12);
   }
-  .alert-bar[data-level="danger"]{border-color:rgba(255,110,110,.5); background:linear-gradient(100deg, rgba(230,60,70,.28), rgba(150,30,60,.16))}
+  .alert-bar[data-level="danger"]{border-color:rgba(255,110,110,.4); background:rgba(230,60,70,.14)}
   .alert-bar .alert-icon{font-size:20px; line-height:1.2}
   .alert-bar .alert-title{font-weight:700; font-size:14.5px; margin-bottom:4px}
   .alert-bar ul{margin:0; padding-left:18px; font-size:13.5px; color:rgba(255,255,255,.88); line-height:1.7}
@@ -123,11 +224,16 @@
   .place-name{font-size:22px; font-weight:700}
   .place-sub{font-size:12.5px; color:var(--txt-faint)}
   .hero-temp{display:flex; align-items:flex-start; gap:4px; margin:6px 0 2px}
-  .hero-temp .num{font-size:76px; font-weight:200; line-height:1; letter-spacing:-3px; font-variant-numeric:tabular-nums}
-  .hero-temp .deg{font-size:24px; font-weight:300; margin-top:8px; color:var(--txt-dim)}
-  .hero-desc{display:flex; align-items:center; gap:9px; font-size:16px}
-  .hero-desc .emoji{font-size:26px}
-  .hero-meta{margin-top:12px; font-size:13.5px; color:var(--txt-dim); display:flex; gap:14px; flex-wrap:wrap}
+  .hero-temp .num{font-size:60px; font-weight:400; line-height:1; letter-spacing:-1px; font-variant-numeric:tabular-nums}
+  .hero-temp .deg{font-size:22px; font-weight:300; margin-top:8px; color:var(--txt-dim)}
+  .hero-desc{display:flex; align-items:center; gap:10px; font-size:17px}
+  .hero-desc .emoji{font-size:30px}
+  .hero-meta{margin-top:14px; display:flex; gap:8px; flex-wrap:wrap}
+  .hero-meta span{
+    padding:6px 11px; border-radius:999px; font-size:12.5px; color:var(--txt-dim);
+    border:1px solid rgba(255,255,255,.09);
+    background:var(--card);
+  }
   .hero-side{text-align:right; font-size:12.5px; color:var(--txt-faint); line-height:1.8; min-width:150px}
   .hero-side .refresh{
     margin-top:10px; display:inline-flex; align-items:center; gap:6px;
@@ -138,7 +244,10 @@
 
   /* ---------- 指标网格 ---------- */
   .metrics{display:grid; grid-template-columns:repeat(auto-fit, minmax(142px,1fr)); gap:12px}
-  .metric{padding:14px 15px; border-radius:16px; border:1px solid var(--line); background:rgba(255,255,255,.05)}
+  .metric{
+    padding:14px 15px; border-radius:10px; border:1px solid rgba(255,255,255,.08);
+    background:var(--card);
+  }
   .metric .m-label{font-size:12px; color:var(--txt-faint); display:flex; align-items:center; gap:5px}
   .metric .m-value{font-size:22px; font-weight:600; margin-top:6px; font-variant-numeric:tabular-nums}
   .metric .m-sub{font-size:12px; color:var(--txt-dim); margin-top:3px}
@@ -150,15 +259,15 @@
   .hourly-scroll::-webkit-scrollbar-track{background:transparent}
   .hourly-inner{position:relative}
   .spark{display:block; overflow:visible}
-  .spark .area{fill:rgba(120,190,255,.16)}
-  .spark .line{fill:none; stroke:rgba(150,205,255,.95); stroke-width:2; stroke-linejoin:round; stroke-linecap:round}
-  .spark .dot{fill:#dceaff}
+  .spark .area{fill:rgba(120,160,200,.14)}
+  .spark .line{fill:none; stroke:rgba(160,190,215,.9); stroke-width:2; stroke-linejoin:round; stroke-linecap:round}
+  .spark .dot{fill:#c9d6e0}
   .spark .t-label{fill:rgba(255,255,255,.92); font-size:11.5px; text-anchor:middle; font-variant-numeric:tabular-nums}
   .hourly-row{display:flex; margin-top:8px}
   .hour-item{flex:0 0 64px; width:64px; text-align:center; font-size:12px; color:var(--txt-dim)}
   .hour-item .h-time{font-size:12px; color:var(--txt-faint)}
   .hour-item .h-icon{font-size:19px; margin:5px 0 3px}
-  .hour-item .h-pop{font-size:11.5px; color:#8ec7ff}
+  .hour-item .h-pop{font-size:11.5px; color:#9db8cc}
   .hour-item .h-pop.dry{color:transparent}
 
   /* ---------- 7 天 ---------- */
@@ -174,10 +283,10 @@
   .day-cond{display:flex; align-items:center; gap:8px; min-width:0}
   .day-cond .emoji{font-size:19px}
   .day-cond .txt{color:var(--txt-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-  .day-pop{font-size:12.5px; color:#8ec7ff; font-variant-numeric:tabular-nums}
+  .day-pop{font-size:12.5px; color:#9db8cc; font-variant-numeric:tabular-nums}
   .day-pop.dry{color:transparent}
-  .range{position:relative; height:6px; border-radius:4px; background:rgba(255,255,255,.13); overflow:hidden}
-  .range-fill{position:absolute; top:0; bottom:0; border-radius:4px; background:linear-gradient(90deg,#57b0f0,#ffd166,#ff8f5e)}
+  .range{position:relative; height:6px; border-radius:4px; background:rgba(255,255,255,.1); overflow:hidden}
+  .range-fill{position:absolute; top:0; bottom:0; border-radius:4px; background:#7fa8c9}
   .day-temp{text-align:right; font-variant-numeric:tabular-nums}
   .day-temp .max{font-weight:600}
   .day-temp .min{color:var(--txt-faint); margin-left:7px}
@@ -193,7 +302,6 @@
   .idx-item .idx-hint{font-size:12.5px; color:var(--txt-dim); margin-top:3px; line-height:1.6}
   .pack-item{display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:13px; border:1px solid var(--line); background:rgba(255,255,255,.05); margin-bottom:9px}
   .pack-item:last-child{margin-bottom:0}
-  .pack-item .p-emoji{font-size:18px; line-height:1.3}
   .pack-item .p-text{font-size:14px; font-weight:600}
   .pack-item .p-reason{font-size:12.2px; color:var(--txt-faint); margin-top:3px; line-height:1.55}
 
@@ -228,9 +336,8 @@
   .toast{
     position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(14px);
     padding:11px 18px; border-radius:13px; font-size:13.5px;
-    border:1px solid var(--line); background:rgba(16,22,36,.94); color:var(--txt);
-    backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
-    box-shadow:0 16px 36px rgba(0,0,0,.45);
+    border:1px solid var(--line); background:#141a22; color:var(--txt);
+    box-shadow:0 12px 28px rgba(0,0,0,.4);
     opacity:0; pointer-events:none; transition:opacity .25s, transform .25s; z-index:60; max-width:88vw; text-align:center;
   }
   .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
@@ -242,9 +349,9 @@
   }
   @media (max-width:640px){
     .app{padding:16px 13px 46px}
-    .card{padding:16px; border-radius:17px}
+    .card{padding:16px}
     .hero{padding:20px 17px}
-    .hero-temp .num{font-size:60px}
+    .hero-temp .num{font-size:44px}
     .hero-side{text-align:left; min-width:0}
     .day-row{grid-template-columns:52px 1fr 84px 78px; gap:8px}
     .day-row .col-pop{display:none}
@@ -254,7 +361,14 @@
 </style>
 </head>
 <body>
-<div class="bg" id="bg"></div>
+<div class="bg" id="bg" aria-hidden="true">
+  <div class="bg-sky"></div>
+  <div class="bg-sun"></div>
+  <div class="bg-night"></div>
+  <div class="bg-cloud"></div>
+  <canvas class="bg-fx" id="fx"></canvas>
+  <div class="bg-flash" id="flash"></div>
+</div>
 
 <div class="app">
   <header class="topbar">
@@ -267,7 +381,13 @@
       <ul class="suggest" id="suggest" role="listbox" hidden></ul>
     </div>
     <div class="controls">
-      <button id="geoBtn" class="icon-btn" type="button" title="定位到当前位置" aria-label="定位到当前位置">📍</button>
+      <button id="soundBtn" class="icon-btn" type="button" title="雨声开关" aria-label="雨声开关" aria-pressed="false" hidden>
+        <svg class="ic-sound-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"></path><path d="M15 9a4 4 0 0 1 0 6"></path><path d="M18 6a7 7 0 0 1 0 12"></path></svg>
+        <svg class="ic-sound-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"></path><line x1="16" y1="9" x2="22" y2="15"></line><line x1="22" y1="9" x2="16" y2="15"></line></svg>
+      </button>
+      <button id="geoBtn" class="icon-btn" type="button" title="定位到当前位置" aria-label="定位到当前位置">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-5.6-7-11a7 7 0 0 1 14 0c0 5.4-7 11-7 11z"></path><circle cx="12" cy="10" r="2.5"></circle></svg>
+      </button>
       <button id="unitBtn" class="pill-btn" type="button" title="切换温度单位">°C</button>
       <button id="windBtn" class="pill-btn" type="button" title="切换风速单位">km/h</button>
     </div>
@@ -325,36 +445,36 @@
 
     <div class="stack">
       <section class="card">
-        <h2 class="card-title">📊 实时指标</h2>
+        <h2 class="card-title">实时指标</h2>
         <div class="metrics" id="metrics"></div>
       </section>
 
       <section class="card">
-        <h2 class="card-title">🕐 未来 24 小时</h2>
+        <h2 class="card-title">未来 24 小时</h2>
         <div class="hourly-scroll" id="hourlyScroll">
           <div class="hourly-inner" id="hourlyInner"></div>
         </div>
       </section>
 
       <section class="card">
-        <h2 class="card-title">📅 未来 7 天</h2>
+        <h2 class="card-title">未来 7 天</h2>
         <div id="daily"></div>
       </section>
 
       <div class="grid-2">
         <section class="card">
-          <h2 class="card-title">🧭 生活指数</h2>
+          <h2 class="card-title">生活指数</h2>
           <div id="indices"></div>
         </section>
         <section class="card">
-          <h2 class="card-title">🎒 出行携带</h2>
+          <h2 class="card-title">出行携带</h2>
           <div id="packing"></div>
         </section>
       </div>
 
       <p class="foot">
         天气数据由 <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> 免费提供（无需 API Key），经本地 Go 服务代理与缓存<br>
-        城市搜索可选用 <a href="https://www.qweather.com" target="_blank" rel="noopener">和风天气 QWeather</a>（服务端配置 QWEATHER_HOST / QWEATHER_KEY 后启用）<br>
+        城市搜索优先使用 <a href="https://lbs.amap.com" target="_blank" rel="noopener">高德地图</a>（服务端配置 AMAP_KEY 后启用，并用于定位取名），也可选 <a href="https://www.qweather.com" target="_blank" rel="noopener">和风天气 QWeather</a>（QWEATHER_HOST / QWEATHER_KEY）<br>
         生活指数与出行建议由天气数据按规则推算，仅供参考
       </p>
     </div>
@@ -401,18 +521,61 @@
     99: ['强雷阵雨伴冰雹','⛈️', 'thunder']
   };
 
+  /* 配色：6 组基准色 + 统一的昼夜调制，而不是维护十几套手调色板。
+     每组是 [色相, 饱和度%, 明度%]；这样"夜间"只需一套规则：更暗、更灰、更冷。
+     刻意拉开各天气之间的色相（晴=蓝、雷暴=紫、雾=中性灰），避免"灰成一团"。 */
   var THEMES = {
-    'clear-day':  { c1: '#0b2545', c2: '#0f4c81', c3: '#3179b5' },
-    'clear-night':{ c1: '#04081a', c2: '#0e1730', c3: '#1e2b4e' },
-    cloudy:       { c1: '#121a29', c2: '#26303f', c3: '#3b4a5e' },
-    rain:         { c1: '#070f1c', c2: '#152a41', c3: '#26485f' },
-    snow:         { c1: '#131c2b', c2: '#2f4257', c3: '#5a728c' },
-    fog:          { c1: '#15181f', c2: '#2e353f', c3: '#48515e' },
-    thunder:      { c1: '#0a0819', c2: '#221a3b', c3: '#3d2a5e' }
+    clear:   { c: [[206, 64, 17], [203, 76, 42], [199, 70, 60]], glow: [36, 94, 72] },
+    cloudy:  { c: [[214, 22, 14], [212, 20, 28], [210, 18, 41]], glow: [200, 32, 74] },
+    rain:    { c: [[205, 54, 7], [202, 52, 20], [198, 48, 32]], glow: [196, 42, 62] },
+    snow:    { c: [[220, 36, 14], [218, 30, 30], [215, 26, 50]], glow: [206, 44, 82] },
+    fog:     { c: [[212, 10, 12], [210, 9, 23], [208, 8, 35]], glow: [205, 12, 68] },
+    thunder: { c: [[266, 46, 7], [262, 38, 19], [258, 32, 30]], glow: [276, 62, 66] }
   };
 
+  /* 每种天气的背景性格：云层浓度、光斑强度、粒子模式 */
+  var KIND_STYLE = {
+    clear:   { cloud: .12, glow: 1, fx: 'none' },
+    cloudy:  { cloud: .70, glow: .18, fx: 'none' },
+    rain:    { cloud: .95, glow: 0, fx: 'rain' },
+    snow:    { cloud: .80, glow: 0, fx: 'snow' },
+    fog:     { cloud: .30, glow: 0, fx: 'fog' },
+    thunder: { cloud: 1, glow: 0, fx: 'rain' }
+  };
+
+  // hslStr 把基准色转成 CSS 颜色；night 为 true 时套用夜间调制。
+  function hslStr(triple, night) {
+    var h = triple[0], s = triple[1], l = triple[2];
+    if (night) {
+      h = (h + 356) % 360;          // 略偏冷
+      s = Math.round(s * .74);
+      l = Math.round(l * .45);
+    }
+    return 'hsl(' + h + ', ' + s + '%, ' + l + '%)';
+  }
+
+  function hslAlpha(triple, a) {
+    return 'hsl(' + triple[0] + ', ' + triple[1] + '%, ' + triple[2] + '%, ' + a + ')';
+  }
+
+  // precipLevel 用 WMO 码本身区分小/中/大，决定粒子密度。
+  function precipLevel(code) {
+    if (code === 65 || code === 82 || code === 75 || code === 86) return 3;
+    if (code === 63 || code === 81 || code === 73 || code === 85) return 2;
+    return 1;
+  }
+
+  // currentWind 取当前风速（km/h）与风向（度），用于雨丝倾角；数据缺失时按无风处理。
+  function currentWind() {
+    var c = state.data && state.data.current;
+    return {
+      speed: c ? (num(c.wind_speed_10m) || 0) : 0,
+      dir: c ? num(c.wind_direction_10m) : null
+    };
+  }
+
   var DEFAULT_PLACE = { name: '北京', admin1: '北京市', country: '中国', latitude: 39.9075, longitude: 116.39723 };
-  var LS = { place: 'wx.place', unit: 'wx.unit', wind: 'wx.wind' };
+  var LS = { place: 'wx.place', unit: 'wx.unit', wind: 'wx.wind', sound: 'wx.sound' };
 
   /* ============================================================
    *  状态
@@ -535,9 +698,12 @@
     try {
       var u = localStorage.getItem(LS.unit);
       var w = localStorage.getItem(LS.wind);
+      var sd = localStorage.getItem(LS.sound);
       if (u === 'c' || u === 'f') state.unit = u;
       if (w === 'kmh' || w === 'ms') state.wind = w;
+      if (sd === 'on' || sd === 'off') sound.on = (sd === 'on');
     } catch (e) { /* ignore */ }
+    soundSet(sound.on); // 同步按钮图标；真正出声要等手势（见 bindControls）
   }
 
   /* ============================================================
@@ -575,6 +741,12 @@
     return getJSON('/api/geocode?q=' + encodeURIComponent(keyword)).then(function (r) {
       return (r && r.results) ? r.results : [];
     });
+  }
+
+  // 用 GPS 坐标反查行政区名。服务端会先把 GPS 坐标转成高德坐标再反查，
+  // 因此这里只取名称类字段，坐标仍沿用原始 GPS（天气接口要求 WGS-84）。
+  function fetchRegeo(lat, lon) {
+    return getJSON('/api/regeo?lat=' + encodeURIComponent(lat) + '&lon=' + encodeURIComponent(lon));
   }
 
   /* 把浏览器真实时区告诉后端：后端据此替代 timezone=auto，使"时区"不再由坐标推导。
@@ -622,14 +794,335 @@
 
   function applyTheme(code, isDay) {
     var kind = codeInfo(code).kind;
-    var theme;
-    if (kind === 'clear') theme = isDay ? THEMES['clear-day'] : THEMES['clear-night'];
-    else if (kind === 'cloudy') theme = isDay ? THEMES.cloudy : THEMES['clear-night'];
-    else theme = THEMES[kind] || THEMES.cloudy;
+    var base = THEMES[kind] || THEMES.cloudy;
+    var style = KIND_STYLE[kind] || KIND_STYLE.cloudy;
     var root = document.documentElement;
-    root.style.setProperty('--c1', theme.c1);
-    root.style.setProperty('--c2', theme.c2);
-    root.style.setProperty('--c3', theme.c3);
+
+    root.style.setProperty('--c1', hslStr(base.c[0], !isDay));
+    root.style.setProperty('--c2', hslStr(base.c[1], !isDay));
+    root.style.setProperty('--c3', hslStr(base.c[2], !isDay));
+    root.style.setProperty('--accent', hslStr(base.glow, false));
+    root.style.setProperty('--accent-soft', hslAlpha(base.glow, .5));
+    root.style.setProperty('--cloud', String(style.cloud));
+    // 光斑只在白天点亮（夜间留冷光会显得脏）
+    root.style.setProperty('--glow', String(isDay ? style.glow : 0));
+
+    // 雷暴复用雨粒子并加闪电；其余按 kind 查表
+    var thunder = kind === 'thunder';
+    var w = currentWind();
+    fxSet(thunder ? 'rain' : style.fx, thunder ? 3 : precipLevel(code), w);
+    flashSet(thunder);
+
+    // 场景元素：太阳只在白天晴天，月亮星星只在晴夜
+    root.style.setProperty('--sun', (kind === 'clear' && isDay) ? '1' : '0');
+    root.style.setProperty('--night', (kind === 'clear' && !isDay) ? '1' : '0');
+
+    // 雨声只在下雨/雷暴时可用；天气变了要跟着淡入淡出
+    var rainy = thunder || style.fx === 'rain';
+    var soundBtn = $('soundBtn');
+    if (soundBtn) soundBtn.hidden = !rainy;
+    if (sound.on) { if (rainy) soundStart(); else soundStop(); }
+  }
+
+  /* ============================================================
+   *  动态背景：粒子引擎（雨 / 雪 / 雾）+ 闪电
+   *
+   *  为什么用 canvas 而不是 DOM：雨雪是几十到几百个粒子，用 div 会持续触发
+   *  合成与样式重算；canvas 一次绘制成本可控，且能按天气强度精确调密度与倾角。
+   * ============================================================ */
+  var FX_MAX = { rain: 300, snow: 180, fog: 90 };
+  var FX_LEVEL = { 1: .8, 2: 1.25, 3: 1.9 };
+  var reduceMotion = false;
+  var fx = {
+    canvas: null, ctx: null, sprite: null,
+    mode: 'none', level: 1, tilt: 0, dir: 0,
+    parts: [], w: 0, h: 0, dpr: 1,
+    raf: 0, last: 0, running: false
+  };
+
+  function fxInit() {
+    fx.canvas = $('fx');
+    if (!fx.canvas || !fx.canvas.getContext) return;
+    fx.ctx = fx.canvas.getContext('2d');
+    fx.sprite = fxPuffSprite();
+    fxResize();
+    window.addEventListener('resize', fxDebounce(fxResize, 180));
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) fxStop();
+      else fxStart(); // fxStart 内部会跳过降级 / 无粒子的情况
+    });
+    var mq = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+    if (mq) {
+      reduceMotion = mq.matches;
+      var onChange = function () { reduceMotion = mq.matches; fxApply(); };
+      if (mq.addEventListener) mq.addEventListener('change', onChange);
+      else if (mq.addListener) mq.addListener(onChange);
+    }
+  }
+
+  function fxDebounce(fn, ms) {
+    var t = 0;
+    return function () { clearTimeout(t); t = setTimeout(fn, ms); };
+  }
+
+  // 雾絮用预渲染的柔光贴图，避免为每个粒子逐帧创建径向渐变（那很贵）
+  function fxPuffSprite() {
+    var s = document.createElement('canvas');
+    s.width = s.height = 64;
+    var c = s.getContext('2d');
+    var g = c.createRadialGradient(32, 32, 0, 32, 32, 32);
+    g.addColorStop(0, 'rgba(226,236,250,.55)');
+    g.addColorStop(1, 'rgba(226,236,250,0)');
+    c.fillStyle = g;
+    c.fillRect(0, 0, 64, 64);
+    return s;
+  }
+
+  function fxSet(mode, level, wind) {
+    fx.mode = mode || 'none';
+    fx.level = level || 1;
+    // 风速 → 倾角（0 km/h → 0°，≥45 km/h → 22°）；方向决定向左还是向右
+    var lean = Math.max(0, Math.min(22, wind.speed * .5)) * Math.PI / 180;
+    fx.tilt = Math.tan(lean);
+    fx.dir = wind.dir == null ? 0 : -Math.sin(wind.dir * Math.PI / 180);
+    fxApply();
+  }
+
+  // 由 applyTheme 与 reduced-motion 变化时调用：按当前模式决定启动/停止/重建
+  function fxApply() {
+    fxStop();
+    fx.parts = [];
+    fxClear();
+    if (reduceMotion || fx.mode === 'none') return;
+    fxBuild();
+    fxStart();
+  }
+
+  function fxResize() {
+    if (!fx.canvas) return;
+    var w = window.innerWidth, h = window.innerHeight;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    fx.w = w; fx.h = h; fx.dpr = dpr;
+    fx.canvas.width = Math.round(w * dpr);
+    fx.canvas.height = Math.round(h * dpr);
+    fx.canvas.style.width = w + 'px';
+    fx.canvas.style.height = h + 'px';
+    fx.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    fxBuild();
+  }
+
+  // 密度 = 视口面积 × 强度系数，并设硬顶（大屏不失控、小屏不空）
+  function fxBuild() {
+    fx.parts = [];
+    if (fx.mode === 'none') return;
+    var area = fx.w * fx.h;
+    var n = Math.round(area / 5200 * (FX_LEVEL[fx.level] || 1));
+    n = Math.max(12, Math.min(FX_MAX[fx.mode] || 120, n));
+    for (var i = 0; i < n; i++) fx.parts.push(fxSpawn(true));
+  }
+
+  function fxSpawn(anywhere) {
+    var p = {};
+    if (fx.mode === 'rain') {
+      p.x = Math.random() * (fx.w + 240) - 120;
+      p.y = anywhere ? Math.random() * fx.h : -40;
+      p.len = 18 + Math.random() * 30;
+      p.v = 380 + Math.random() * 300;
+      p.a = .26 + Math.random() * .38;
+      p.w = 1 + Math.random() * 1;
+      return p;
+    }
+    if (fx.mode === 'snow') {
+      p.x = Math.random() * fx.w;
+      p.y = anywhere ? Math.random() * fx.h : -20;
+      p.r = 1.3 + Math.random() * 2.4;
+      p.v = 18 + Math.random() * 34;
+      p.sway = 10 + Math.random() * 26;
+      p.ph = Math.random() * 6.2832;
+      p.a = .45 + Math.random() * .5;
+      return p;
+    }
+    p.x = Math.random() * (fx.w + 260) - 130;
+    p.y = Math.random() * fx.h;
+    p.r = 80 + Math.random() * 150;
+    p.v = 4 + Math.random() * 10;
+    p.a = .05 + Math.random() * .08;
+    return p;
+  }
+
+  function fxStep(dt) {
+    for (var i = 0; i < fx.parts.length; i++) {
+      var p = fx.parts[i];
+      if (fx.mode === 'rain') {
+        p.x += fx.dir * fx.tilt * p.v * dt;
+        p.y += p.v * dt;
+        if (p.y > fx.h + 40 || p.x < -140 || p.x > fx.w + 140) fx.parts[i] = fxSpawn(false);
+      } else if (fx.mode === 'snow') {
+        p.ph += dt * 1.1;
+        p.x += Math.sin(p.ph) * p.sway * dt;
+        p.y += p.v * dt;
+        if (p.y > fx.h + 20) fx.parts[i] = fxSpawn(false);
+      } else {
+        p.x += p.v * dt;
+        if (p.x - p.r > fx.w + 120) { p.x = -p.r - 60; p.y = Math.random() * fx.h; }
+      }
+    }
+  }
+
+  function fxDraw() {
+    var ctx = fx.ctx, i, p;
+    ctx.clearRect(0, 0, fx.w, fx.h);
+    if (fx.mode === 'rain') {
+      ctx.lineCap = 'round';
+      for (i = 0; i < fx.parts.length; i++) {
+        p = fx.parts[i];
+        ctx.strokeStyle = 'rgba(198,224,255,' + p.a.toFixed(3) + ')';
+        ctx.lineWidth = p.w;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x - fx.dir * fx.tilt * p.len, p.y - p.len);
+        ctx.stroke();
+      }
+      return;
+    }
+    if (fx.mode === 'snow') {
+      for (i = 0; i < fx.parts.length; i++) {
+        p = fx.parts[i];
+        ctx.fillStyle = 'rgba(255,255,255,' + p.a.toFixed(3) + ')';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, 6.2832);
+        ctx.fill();
+      }
+      return;
+    }
+    for (i = 0; i < fx.parts.length; i++) {
+      p = fx.parts[i];
+      ctx.globalAlpha = p.a;
+      ctx.drawImage(fx.sprite, p.x - p.r, p.y - p.r, p.r * 2, p.r * 2);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function fxFrame(ts) {
+    fx.raf = 0;
+    if (!fx.running) return;
+    if (!fx.last) fx.last = ts;
+    var dt = Math.min((ts - fx.last) / 1000, .05); // 切回标签页后不跳一大步
+    fx.last = ts;
+    fxStep(dt);
+    fxDraw();
+    if (fx.running) fx.raf = requestAnimationFrame(fxFrame);
+  }
+
+  function fxStart() {
+    if (fx.running || reduceMotion || fx.mode === 'none') return;
+    fx.running = true;
+    fx.last = 0;
+    fx.raf = requestAnimationFrame(fxFrame);
+  }
+
+  function fxStop() {
+    fx.running = false;
+    if (fx.raf) { cancelAnimationFrame(fx.raf); fx.raf = 0; }
+  }
+
+  function fxClear() {
+    if (fx.ctx) fx.ctx.clearRect(0, 0, fx.w, fx.h);
+  }
+
+  /* ---------- 闪电：随机 3~6s 间隔，二次闪（动画本身 300ms 内完成） ---------- */
+  var flashTimer = 0;
+  function flashSet(on) {
+    clearTimeout(flashTimer);
+    flashTimer = 0;
+    var el = $('flash');
+    if (on && !reduceMotion && el) scheduleFlash();
+    else if (el) el.classList.remove('on');
+  }
+  function scheduleFlash() {
+    flashTimer = setTimeout(function () {
+      var el = $('flash');
+      if (!el || reduceMotion) { flashTimer = 0; return; }
+      el.classList.remove('on');
+      void el.offsetWidth; // 强制重排以重启动画
+      el.classList.add('on');
+      scheduleFlash();
+    }, 3000 + Math.random() * 3000);
+  }
+
+  /* ---------- 雨声：Web Audio 合成（粉噪声 + 滤波器） ----------
+     刻意不加载音频文件：一段循环雨声录音内嵌成 base64 会让单文件涨几百 KB，
+     破坏零依赖。合成版的听感是"持续的雨声底噪"，音量随降雨强度分档。 */
+  var sound = { ctx: null, src: null, gain: null, on: false };
+
+  function soundVolume() {
+    return fx.level >= 3 ? .22 : fx.level === 2 ? .16 : .11;
+  }
+
+  function soundAvailable() { return fx.mode === 'rain'; }
+
+  function soundStart() {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!sound.ctx) sound.ctx = new AC();
+    // 没有用户手势时 resume 会被浏览器拒绝，这里静默失败：
+    // 偏好仍是开，等首次点击（见 bindControls 的一次性监听）再真正出声。
+    if (sound.ctx.state === 'suspended') sound.ctx.resume();
+    if (sound.gain) { // 已在响：只按当前雨势调音量
+      sound.gain.gain.linearRampToValueAtTime(soundVolume(), sound.ctx.currentTime + .8);
+      return;
+    }
+
+    var seconds = 2, rate = sound.ctx.sampleRate;
+    var buf = sound.ctx.createBuffer(1, rate * seconds, rate);
+    var d = buf.getChannelData(0), b0 = 0, b1 = 0, b2 = 0;
+    for (var i = 0; i < d.length; i++) {
+      var white = Math.random() * 2 - 1;
+      b0 = .99765 * b0 + white * .0990460;
+      b1 = .96300 * b1 + white * .2965164;
+      b2 = .57000 * b2 + white * 1.0526913;
+      d[i] = (b0 + b1 + b2 + white * .1848) * .16;
+    }
+
+    var src = sound.ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    var hp = sound.ctx.createBiquadFilter();
+    hp.type = 'highpass'; hp.frequency.value = 500;
+    var lp = sound.ctx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 2400; lp.Q.value = .3;
+    var gain = sound.ctx.createGain();
+    gain.gain.value = 0;
+    src.connect(hp); hp.connect(lp); lp.connect(gain); gain.connect(sound.ctx.destination);
+    src.start();
+    gain.gain.linearRampToValueAtTime(soundVolume(), sound.ctx.currentTime + 1.2);
+    sound.src = src;
+    sound.gain = gain;
+  }
+
+  function soundStop() {
+    if (!sound.ctx || !sound.gain) return;
+    var g = sound.gain, s = sound.src, ctx = sound.ctx;
+    sound.gain = null;
+    sound.src = null;
+    g.gain.linearRampToValueAtTime(.0001, ctx.currentTime + .5);
+    setTimeout(function () { try { s.stop(); } catch (e) {} }, 600);
+  }
+
+  function soundSet(on) {
+    sound.on = on;
+    var btn = $('soundBtn');
+    if (btn) {
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    if (on && soundAvailable()) soundStart();
+    else soundStop();
+  }
+
+  function soundToggle() {
+    sound.on = !sound.on;
+    try { localStorage.setItem(LS.sound, sound.on ? 'on' : 'off'); } catch (e) {}
+    soundSet(sound.on);
   }
 
   /* ============================================================
@@ -677,13 +1170,27 @@
     $('geoBtn').classList.add('busy');
     return requestPosition().then(function (pos) {
       var c = pos.coords;
-      var place = {
-        name: '当前位置',
-        admin1: 'GPS 定位',
-        country: '纬度 ' + c.latitude.toFixed(2) + '° · 经度 ' + c.longitude.toFixed(2) + '°',
-        latitude: c.latitude,
-        longitude: c.longitude
-      };
+      return fetchRegeo(c.latitude, c.longitude).then(function (r) {
+        return {
+          name: r.name || '当前位置',
+          admin1: r.district || r.province || 'GPS 定位',
+          country: r.country || '',
+          latitude: c.latitude,
+          longitude: c.longitude
+        };
+      }, function () {
+        // 取名失败（未配置 AMAP_KEY / 额度超限 / 坐标在海外等）不该影响看天气，
+        // 回落到既有展示。注意这里**不能**冒泡到外层 catch：那会把用户已经拿到的
+        // GPS 位置丢掉、改成默认城市。
+        return {
+          name: '当前位置',
+          admin1: 'GPS 定位',
+          country: '纬度 ' + c.latitude.toFixed(2) + '° · 经度 ' + c.longitude.toFixed(2) + '°',
+          latitude: c.latitude,
+          longitude: c.longitude
+        };
+      });
+    }).then(function (place) {
       return loadWeather(place, { silent: opts.silent });
     }).catch(function (err) {
       var why = err.message === 'denied' ? '已拒绝定位授权'
@@ -807,7 +1314,9 @@
     var sub = [p.admin1, p.country].filter(function (s) { return s && s !== p.name; }).join(' · ');
     $('placeSub').textContent = sub;
 
-    $('heroTemp').textContent = tempText(c.temperature_2m);
+    // 主温度只放数字，单位交给 #heroUnit 单独显示，避免出现「26°°C」的双度符号。
+    var hv = num(c.temperature_2m);
+    $('heroTemp').textContent = hv === null ? '--' : Math.round(state.unit === 'c' ? hv : hv * 9 / 5 + 32);
     $('heroUnit').textContent = state.unit === 'c' ? '°C' : '°F';
     $('heroIcon').textContent = info.emoji;
     $('heroDesc').textContent = info.text;
@@ -829,19 +1338,19 @@
     var t = todayValues();
 
     var items = [
-      { icon: '🌡️', label: '体感温度', value: tempExact(c.apparent_temperature), sub: '实测 ' + tempExact(c.temperature_2m) },
-      { icon: '💧', label: '相对湿度', value: c.relative_humidity_2m === undefined ? '--' : Math.round(c.relative_humidity_2m) + '%', sub: humidityHint(num(c.relative_humidity_2m)) },
-      { icon: '🌬️', label: '风速', value: windText(c.wind_speed_10m), sub: windHint(num(c.wind_speed_10m)) },
-      { icon: '🌧️', label: '过去 1 小时降水', value: c.precipitation === undefined ? '--' : Number(c.precipitation).toFixed(1) + ' mm', sub: (num(c.precipitation) > 0 ? '有降水' : '无降水') },
-      { icon: '🫁', label: '空气质量 US AQI', value: (air && air.us_aqi !== undefined && air.us_aqi !== null) ? Math.round(air.us_aqi) : '暂无', sub: air ? aqiLabel(air.us_aqi) : '空气质量接口不可用' },
-      { icon: '🌫️', label: 'PM2.5 / PM10', value: (air && air.pm2_5 !== undefined && air.pm2_5 !== null) ? Math.round(air.pm2_5) + ' / ' + (air.pm10 !== undefined && air.pm10 !== null ? Math.round(air.pm10) : '--') : '暂无', sub: '单位 μg/m³' },
-      { icon: '☀️', label: '紫外线峰值', value: t.uv === null ? '暂无' : t.uv.toFixed(1), sub: uvInfo(t.uv)[0] + ' · ' + uvInfo(t.uv)[1] },
-      { icon: '🔺', label: '今日高温', value: tempExact(t.tmax), sub: '低温 ' + tempExact(t.tmin) }
+      { label: '体感温度', value: tempExact(c.apparent_temperature), sub: '实测 ' + tempExact(c.temperature_2m) },
+      { label: '相对湿度', value: c.relative_humidity_2m === undefined ? '--' : Math.round(c.relative_humidity_2m) + '%', sub: humidityHint(num(c.relative_humidity_2m)) },
+      { label: '风速', value: windText(c.wind_speed_10m), sub: windHint(num(c.wind_speed_10m)) },
+      { label: '过去 1 小时降水', value: c.precipitation === undefined ? '--' : Number(c.precipitation).toFixed(1) + ' mm', sub: (num(c.precipitation) > 0 ? '有降水' : '无降水') },
+      { label: '空气质量 US AQI', value: (air && air.us_aqi !== undefined && air.us_aqi !== null) ? Math.round(air.us_aqi) : '暂无', sub: air ? aqiLabel(air.us_aqi) : '空气质量接口不可用' },
+      { label: 'PM2.5 / PM10', value: (air && air.pm2_5 !== undefined && air.pm2_5 !== null) ? Math.round(air.pm2_5) + ' / ' + (air.pm10 !== undefined && air.pm10 !== null ? Math.round(air.pm10) : '--') : '暂无', sub: '单位 μg/m³' },
+      { label: '紫外线峰值', value: t.uv === null ? '暂无' : t.uv.toFixed(1), sub: uvInfo(t.uv)[0] + ' · ' + uvInfo(t.uv)[1] },
+      { label: '今日高温', value: tempExact(t.tmax), sub: '低温 ' + tempExact(t.tmin) }
     ];
 
     $('metrics').innerHTML = items.map(function (it) {
       return '<div class="metric">' +
-        '<div class="m-label">' + it.icon + ' ' + escapeHtml(it.label) + '</div>' +
+        '<div class="m-label">' + escapeHtml(it.label) + '</div>' +
         '<div class="m-value">' + escapeHtml(it.value) + '</div>' +
         '<div class="m-sub">' + escapeHtml(it.sub) + '</div>' +
       '</div>';
@@ -851,6 +1360,36 @@
   /* ============================================================
    *  渲染：24 小时曲线
    * ============================================================ */
+  // smoothPath 用 Catmull-Rom 转三次贝塞尔，把折线变平滑曲线。
+  function smoothPath(pts) {
+    if (!pts.length) return '';
+    if (pts.length < 3) {
+      return 'M' + pts.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' L');
+    }
+    var d = 'M' + pts[0][0].toFixed(1) + ',' + pts[0][1].toFixed(1);
+    for (var i = 0; i < pts.length - 1; i++) {
+      var p0 = pts[i - 1] || pts[i];
+      var p1 = pts[i];
+      var p2 = pts[i + 1];
+      var p3 = pts[i + 2] || p2;
+      var c1x = p1[0] + (p2[0] - p0[0]) / 6;
+      var c1y = p1[1] + (p2[1] - p0[1]) / 6;
+      var c2x = p2[0] - (p3[0] - p1[0]) / 6;
+      var c2y = p2[1] - (p3[1] - p1[1]) / 6;
+      d += ' C' + c1x.toFixed(1) + ',' + c1y.toFixed(1) + ' ' +
+           c2x.toFixed(1) + ',' + c2y.toFixed(1) + ' ' +
+           p2[0].toFixed(1) + ',' + p2[1].toFixed(1);
+    }
+    return d;
+  }
+
+  // isExtreme 判断某个点是否是首尾或局部极值：节点只在这些位置画，减少锯齿感。
+  function isExtreme(pts, i) {
+    if (i === 0 || i === pts.length - 1) return true;
+    var a = pts[i - 1][1], b = pts[i][1], c = pts[i + 1][1];
+    return (b <= a && b <= c) || (b >= a && b >= c);
+  }
+
   function renderHourly() {
     var hours = nextHours(24);
     var inner = $('hourlyInner');
@@ -872,15 +1411,21 @@
       var py = TOP + (1 - (temps[i] - min) / span) * (H - TOP - BOT);
       return [px, py];
     });
-    var linePts = pts.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ');
-    var polyPts = pts[0][0].toFixed(1) + ',' + H + ' ' + linePts + ' ' + pts[pts.length - 1][0].toFixed(1) + ',' + H;
+    var linePath = smoothPath(pts);
+    var areaPath = linePath + ' L' + pts[pts.length - 1][0].toFixed(1) + ',' + H +
+                   ' L' + pts[0][0].toFixed(1) + ',' + H + ' Z';
+    var dots = pts.map(function (p, i) {
+      return isExtreme(pts, i)
+        ? '<circle class="dot" cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="2.6"></circle>'
+        : '';
+    }).join('');
 
     var svg = '<svg class="spark" width="' + w + '" height="' + H + '" viewBox="0 0 ' + w + ' ' + H + '" aria-hidden="true">' +
-      '<polygon class="area" points="' + polyPts + '"></polygon>' +
-      '<polyline class="line" points="' + linePts + '"></polyline>' +
+      '<path class="area" d="' + areaPath + '"></path>' +
+      '<path class="line" d="' + linePath + '"></path>' +
+      dots +
       pts.map(function (p, i) {
-        return '<circle class="dot" cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="2.4"></circle>' +
-               '<text class="t-label" x="' + p[0].toFixed(1) + '" y="' + (p[1] - 8).toFixed(1) + '">' + tempText(hours[i].temp) + '</text>';
+        return '<text class="t-label" x="' + p[0].toFixed(1) + '" y="' + (p[1] - 8).toFixed(1) + '">' + tempText(hours[i].temp) + '</text>';
       }).join('') +
     '</svg>';
 
@@ -950,16 +1495,15 @@
     var wash = washInfo(t.pop);
 
     var items = [
-      { e: '👕', n: '穿衣指数', v: dress[0], h: '体感温度 ' + tempExact(fl) + '，' + dress[1] },
-      { e: '🕶️', n: '紫外线强度', v: uv[0], h: (t.uv === null ? '暂无紫外线数据' : '今日峰值 ' + t.uv.toFixed(1) + '，' + uv[1]) },
-      { e: '🏃', n: '运动适宜度', v: sport[0], h: '降水概率 ' + (t.pop === null ? '--' : t.pop + '%') + '，' + windText(wind) + '，' + sport[1] },
-      { e: '🚗', n: '洗车适宜度', v: wash[0], h: '今日最高降水概率 ' + (t.pop === null ? '--' : t.pop + '%') + '，' + wash[1] },
-      { e: '😷', n: '空气与防护', v: aqiLabel(aqi), h: aqi === null ? aqiHint(null) : 'US AQI ' + Math.round(aqi) + '，' + aqiHint(aqi) }
+      { n: '穿衣指数', v: dress[0], h: '体感温度 ' + tempExact(fl) + '，' + dress[1] },
+      { n: '紫外线强度', v: uv[0], h: (t.uv === null ? '暂无紫外线数据' : '今日峰值 ' + t.uv.toFixed(1) + '，' + uv[1]) },
+      { n: '运动适宜度', v: sport[0], h: '降水概率 ' + (t.pop === null ? '--' : t.pop + '%') + '，' + windText(wind) + '，' + sport[1] },
+      { n: '洗车适宜度', v: wash[0], h: '今日最高降水概率 ' + (t.pop === null ? '--' : t.pop + '%') + '，' + wash[1] },
+      { n: '空气与防护', v: aqiLabel(aqi), h: aqi === null ? aqiHint(null) : 'US AQI ' + Math.round(aqi) + '，' + aqiHint(aqi) }
     ];
 
     $('indices').innerHTML = items.map(function (it) {
       return '<div class="idx-item">' +
-        '<span class="idx-emoji" aria-hidden="true">' + it.e + '</span>' +
         '<div class="idx-body">' +
           '<div class="idx-head"><span class="idx-name">' + escapeHtml(it.n) + '</span><span class="idx-value">' + escapeHtml(it.v) + '</span></div>' +
           '<div class="idx-hint">' + escapeHtml(it.h) + '</div>' +
@@ -981,35 +1525,35 @@
     var list = [];
 
     if (t.pop !== null && t.pop >= 50 || info.kind === 'rain' || info.kind === 'thunder') {
-      list.push({ e: '☂️', t: '雨伞', r: '降水概率 ' + (t.pop === null ? '--' : t.pop + '%') + '，天气为' + info.text });
+      list.push({ t: '雨伞', r: '降水概率 ' + (t.pop === null ? '--' : t.pop + '%') + '，天气为' + info.text });
     }
     if (info.kind === 'snow') {
-      list.push({ e: '🧤', t: '手套与防滑鞋', r: '有降雪，路面可能湿滑结冰' });
+      list.push({ t: '手套与防滑鞋', r: '有降雪，路面可能湿滑结冰' });
     }
     if (aqi !== null && aqi > 100) {
-      list.push({ e: '😷', t: '口罩', r: '空气质量指数 ' + Math.round(aqi) + '（' + aqiLabel(aqi) + '），建议佩戴' });
+      list.push({ t: '口罩', r: '空气质量指数 ' + Math.round(aqi) + '（' + aqiLabel(aqi) + '），建议佩戴' });
     } else if (info.kind === 'fog') {
-      list.push({ e: '😷', t: '口罩', r: '有雾，能见度低，建议防护' });
+      list.push({ t: '口罩', r: '有雾，能见度低，建议防护' });
     }
     if (t.uv !== null && t.uv >= 6 || (info.kind === 'clear' && c.is_day === 1)) {
-      list.push({ e: '🕶️', t: '墨镜', r: t.uv !== null && t.uv >= 6 ? '紫外线指数 ' + t.uv.toFixed(1) + '，日照较强' : '白天晴朗，光线刺眼' });
+      list.push({ t: '墨镜', r: t.uv !== null && t.uv >= 6 ? '紫外线指数 ' + t.uv.toFixed(1) + '，日照较强' : '白天晴朗，光线刺眼' });
     }
     if (t.uv !== null && t.uv >= 6) {
-      list.push({ e: '🧴', t: '防晒霜', r: '紫外线指数 ' + t.uv.toFixed(1) + '，' + uvInfo(t.uv)[0] });
+      list.push({ t: '防晒霜', r: '紫外线指数 ' + t.uv.toFixed(1) + '，' + uvInfo(t.uv)[0] });
     }
     if (t.tmin !== null && t.tmin < 5) {
-      list.push({ e: '🧣', t: '羽绒服与围巾', r: '最低气温 ' + tempExact(t.tmin) + '，注意保暖防寒' });
+      list.push({ t: '羽绒服与围巾', r: '最低气温 ' + tempExact(t.tmin) + '，注意保暖防寒' });
     } else if (t.tmin !== null && t.tmin < 15) {
-      list.push({ e: '🧥', t: '外套', r: '最低气温 ' + tempExact(t.tmin) + '，早晚偏凉' });
+      list.push({ t: '外套', r: '最低气温 ' + tempExact(t.tmin) + '，早晚偏凉' });
     }
     if (t.tmax !== null && t.tmax >= 32) {
-      list.push({ e: '💧', t: '饮用水', r: '最高气温 ' + tempExact(t.tmax) + '，注意补水防暑' });
+      list.push({ t: '饮用水', r: '最高气温 ' + tempExact(t.tmax) + '，注意补水防暑' });
     }
     if (wind !== null && wind >= 30) {
-      list.push({ e: '🧢', t: '防风帽', r: '风速 ' + windText(wind) + '，注意固定随身物品' });
+      list.push({ t: '防风帽', r: '风速 ' + windText(wind) + '，注意固定随身物品' });
     }
     if (!list.length) {
-      list.push({ e: '👍', t: '轻装出行', r: '今日天气平稳（' + info.text + '，' + tempExact(t.tmin) + '~' + tempExact(t.tmax) + '），无需特别携带' });
+      list.push({ t: '轻装出行', r: '今日天气平稳（' + info.text + '，' + tempExact(t.tmin) + '~' + tempExact(t.tmax) + '），无需特别携带' });
     }
     return list;
   }
@@ -1017,7 +1561,6 @@
   function renderPacking() {
     $('packing').innerHTML = buildPacking().map(function (it) {
       return '<div class="pack-item">' +
-        '<span class="p-emoji" aria-hidden="true">' + it.e + '</span>' +
         '<div><div class="p-text">' + escapeHtml(it.t) + '</div><div class="p-reason">' + escapeHtml(it.r) + '</div></div>' +
       '</div>';
     }).join('');
@@ -1096,6 +1639,10 @@
    *  城市搜索
    * ============================================================ */
   var searchTimer = null;
+
+  // 低置信度级别：这些结果不是行政区政府驻地，容易被误当成城市选中。
+  // 「非行政地名」来自高德路径（它是地址解析，可能出现道路 / 兴趣点 / 门牌号级匹配）。
+  var LOW_LEVELS = { '村镇级': 1, '乡镇级': 1, '非行政地名': 1 };
 
   function closeSuggest() {
     $('suggest').hidden = true;
@@ -1248,6 +1795,15 @@
       if (state.data) render();
     });
 
+    $('soundBtn').addEventListener('click', soundToggle);
+
+    // 浏览器要求"用户手势"才能出声：如果记住的偏好是开，
+    // 第一次点击页面任何位置时补上真正的启动。
+    document.addEventListener('pointerdown', function onFirstGesture() {
+      document.removeEventListener('pointerdown', onFirstGesture);
+      if (sound.on && soundAvailable()) soundStart();
+    });
+
     $('retryBtn').addEventListener('click', function () {
       if (state.lastAction) {
         state.lastAction();
@@ -1261,6 +1817,7 @@
    *  启动
    * ============================================================ */
   function init() {
+    fxInit();
     restorePrefs();
     updateUnitButtons();
     bindSearch();

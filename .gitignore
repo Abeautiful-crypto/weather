@@ -18,3 +18,4 @@ coverage.html
 # 编辑器与系统
 .DS_Store
 Thumbs.db
+.idea/

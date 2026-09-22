@@ -3,10 +3,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+
+	"weather/internal/amap"
 )
 
 // maxGeocodeCandidates 限制一次搜索最多向上下游发起的候选查询数。
@@ -333,4 +336,178 @@ func (s *Server) searchPlacesQWeather(ctx context.Context, q string) ([]byte, er
 		})
 	}
 	return json.Marshal(map[string]any{"results": results})
+}
+
+// amapPlace 是高德地理编码映射到前端已有结构后的形状。
+//
+// 字段名与另外两条路径（Open-Meteo / 和风）保持一致，前端因此不需要知道
+// 当前用的是哪个数据源。
+type amapPlace struct {
+	Name      string  `json:"name"`
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+	Admin1    string  `json:"admin1"`
+	Country   string  `json:"country"`
+	Level     string  `json:"level"`
+	Adcode    string  `json:"adcode"`
+	Source    string  `json:"source"`
+}
+
+// searchPlacesAMap 调用高德地理编码并把结果映射成前端已有结构。
+//
+// 命名规则是为了让实测的三条「朝阳」结果**仅凭 name + admin1 就能区分**
+// （前端只展示这两个字段）：
+//   - 有区县时 name 取区县名、admin1 取「省 · 市」——于是"北京市朝阳区"读作
+//     「朝阳区 | 北京市 · 中国」、"长春市朝阳区"读作「朝阳区 | 吉林省 · 长春市 · 中国」；
+//   - 无区县时 name 取市名、admin1 取省名，直辖市（省==市）时 admin1 置空，
+//     由前端的既有去重逻辑渲染成「上海市 | 中国」。
+//
+// 刻意不做 level 白名单过滤：实测输入城市名时高德只返回行政级别结果
+// （"朝阳"返回 3 条，全部是市/区县），丢弃逻辑没有收益却可能把有效结果滤掉。
+// 非行政级别的匹配（道路、兴趣点、门牌号）交由 level 标注提示用户，
+// 而不是让结果凭空消失。
+func (s *Server) searchPlacesAMap(ctx context.Context, q string) ([]byte, error) {
+	places, err := s.am.Geocode(ctx, q)
+	if errors.Is(err, amap.ErrNoResult) {
+		// 高德明确"这个输入解析不出来"（实测 infocode=30001），语义等同于"没有匹配"：
+		// 返回空结果让回落链继续，前端最终会显示「未找到相关城市」。
+		return emptyResults(), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]amapPlace, 0, len(places))
+	for _, p := range places {
+		var name, admin1 string
+		switch {
+		case p.District != "":
+			name = p.District
+			admin1 = joinUnique(p.Province, p.City)
+		case p.City != "":
+			name = p.City
+			if p.Province != name {
+				admin1 = p.Province
+			}
+		default:
+			name = firstNonEmpty(p.Province, p.Name)
+		}
+
+		results = append(results, amapPlace{
+			Name:      name,
+			Latitude:  p.Latitude,
+			Longitude: p.Longitude,
+			Admin1:    admin1,
+			Country:   p.Country,
+			Level:     levelOfAMapLevel(p.Level),
+			Adcode:    p.Adcode,
+			Source:    "amap",
+		})
+	}
+	return json.Marshal(map[string]any{"results": results})
+}
+
+// levelOfAMapLevel 把高德的匹配级别归一化成与 GeoNames 路径同一套中文词汇，
+// 让前端那套"低置信度标注"对高德结果同样生效。
+//
+// 高德的 level 描述的是"地址解析匹配到哪一级"，因此会出现行政区之外的取值
+// （道路、兴趣点、门牌号、公交站点…）。这些值没有行政含义，统一标注为
+// 「非行政地名」，避免用户把它当成正常城市候选选中。
+func levelOfAMapLevel(level string) string {
+	switch strings.TrimSpace(level) {
+	case "", "国家":
+		return ""
+	case "省":
+		return "省级"
+	case "市":
+		return "地级"
+	case "区县", "开发区":
+		return "县级"
+	case "乡镇":
+		return "乡镇级"
+	case "村庄":
+		return "村镇级"
+	default:
+		return "非行政地名"
+	}
+}
+
+// joinUnique 用「 · 」连接非空且互不相同的部分，避免直辖市出现
+// 「北京市 · 北京市」这种重复展示。
+func joinUnique(parts ...string) string {
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		dup := false
+		for _, seen := range out {
+			if seen == p {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, " · ")
+}
+
+// firstNonEmpty 返回第一个非空（去空白后）的字符串。
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// resultCount 统计 {"results":[...]} 里的条目数，用于判断"这一路是否查无结果"。
+// 无法解析时返回 0；正常路径的 body 都由本包自己序列化，不存在这种情况。
+func resultCount(body []byte) int {
+	var parsed struct {
+		Results []json.RawMessage `json:"results"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return 0
+	}
+	return len(parsed.Results)
+}
+
+// emptyResults 返回 {"results":[]}。必须是数组而不是 null，前端才能走到
+// "未找到相关城市"分支。
+func emptyResults() []byte { return []byte(`{"results":[]}`) }
+
+// administrativeLevels 是"算得上行政区"的归一化级别，两套词汇表（GeoNames 与高德）
+// 都列在这里，改词表时两边一起改。
+var administrativeLevels = map[string]bool{
+	"首都": true, "省级": true, "地级": true, "县级": true, "乡镇级": true, "城区": true,
+}
+
+// hasAdministrativeMatch 判断这一路的结果里是否至少有一条落到了行政区级别。
+//
+// 高德是"地址解析"而不是"地名搜索"：解析不出目标地名时它会返回一堆字面同名的
+// 低级别结果（实测 东京 / Tokyo → 6 条 level=村庄 的「…平南县东京」）。这类"弱结果"
+// 若被当成"有结果"，就会永久挡住后面数据源的正确答案（GeoNames 的东京）。
+//
+// 弱结果也不能直接丢：搜"三元村"时高德给出 10 条真实存在的同名村庄，那就是这个
+// 输入的全部答案，所以调用方只在"没有更强结果"时才拿它兜底。
+func hasAdministrativeMatch(body []byte) bool {
+	var parsed struct {
+		Results []struct {
+			Level string `json:"level"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return false
+	}
+	for _, r := range parsed.Results {
+		if administrativeLevels[r.Level] {
+			return true
+		}
+	}
+	return false
 }

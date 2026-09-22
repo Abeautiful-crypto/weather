@@ -69,7 +69,7 @@ func newQWeatherEnv(t *testing.T, handler http.HandlerFunc) (baseURL string, see
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := New(cache.New(time.Minute), upstream.New(time.Second, upstream.DefaultEndpoints()), qwClient, logger)
+	srv := New(cache.New(time.Minute), upstream.New(time.Second, upstream.DefaultEndpoints()), nil, qwClient, logger)
 	static := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<title>weather</title>")}}
 	ts := httptest.NewServer(srv.Routes(static))
 	t.Cleanup(ts.Close)
