@@ -38,6 +38,9 @@ const (
 	// envAMapKey 是高德 Web 服务 Key。高德的鉴权只能走 URL 查询参数（没有可用的
 	// 请求头鉴权），因此 amap 包内部对错误信息做了脱敏，避免 Key 随日志落地。
 	envAMapKey = "AMAP_KEY"
+	// keyFileAMap 是 amap.key 的文件名：项目根目录下一行纯文本的高德 Key，
+	// 用于环境变量不可靠的场景（IDE 运行、双击 exe）。已加入 .gitignore。
+	keyFileAMap = "amap.key"
 	// envQWeatherHost 与 envQWeatherKey 成对出现：和风必须使用账号专属 API Host。
 	envQWeatherHost = "QWEATHER_HOST"
 	envQWeatherKey  = "QWEATHER_KEY"
@@ -131,13 +134,26 @@ func resolveStatic(webDir string) (fs.FS, error) {
 	return os.DirFS(dir), nil
 }
 
-// newAMapClient 按环境变量创建高德客户端；未配置 Key 时返回 nil，城市搜索退到
-// 下一路，/api/regeo 返回 503。任何情况下都不打印 API Key。
+// newAMapClient 创建高德客户端，Key 的来源依次为：
+//  1. 环境变量 AMAP_KEY；
+//  2. 工作目录下的 amap.key 文件（一行纯文本）。
+//
+// 文件方式是为了 IDE 运行、双击 exe 等环境变量不可靠的场景：只要工作目录是
+// 项目根，服务就能读到 Key，不需要配置任何系统环境变量。该文件已加入
+// .gitignore，不会进入仓库。未配置时返回 nil，城市搜索退到下一路，
+// /api/regeo 返回 503。任何情况下都不打印 Key 本身。
 func newAMapClient(logger *slog.Logger, timeout time.Duration) *amap.Client {
 	key := strings.TrimSpace(os.Getenv(envAMapKey))
+	source := envAMapKey
 	if key == "" {
-		logger.Info("城市搜索数据源：高德未配置（缺少 "+envAMapKey+"）",
-			"提示", "配置 "+envAMapKey+" 可启用高德地理编码与定位取名")
+		if b, err := os.ReadFile(keyFileAMap); err == nil {
+			key = strings.TrimSpace(string(b))
+			source = keyFileAMap
+		}
+	}
+	if key == "" {
+		logger.Info("城市搜索数据源：高德未配置",
+			"提示", "设置环境变量 "+envAMapKey+"，或在项目根目录创建 "+keyFileAMap+" 文件（一行纯文本），即可启用高德地理编码与定位取名")
 		return nil
 	}
 
@@ -146,7 +162,7 @@ func newAMapClient(logger *slog.Logger, timeout time.Duration) *amap.Client {
 		logger.Warn("高德客户端初始化失败，城市搜索将回落", "err", err)
 		return nil
 	}
-	logger.Info("城市搜索数据源：高德地理编码", "定位取名", "已启用")
+	logger.Info("城市搜索数据源：高德地理编码", "定位取名", "已启用", "key 来源", source)
 	return client
 }
 
