@@ -18,8 +18,8 @@
 
 ```bash
 # 克隆并进入目录
-git clone https://github.com/Abeautiful-crypto/-.git
-cd -
+git clone https://github.com/Abeautiful-crypto/weather.git
+cd weather
 
 # 构建
 go build -o weather .
@@ -52,6 +52,8 @@ export AMAP_KEY=你的高德Key   # 可选
 | `AMAP_KEY` | 高德 Web 服务 Key。配置后城市搜索优先走高德（中文覆盖到区县），并启用定位取名。申请：[高德开放平台](https://lbs.amap.com/)，个人认证开发者每月免费额度充足 |
 | `QWEATHER_HOST` | 和风天气专属 API Host，与 `QWEATHER_KEY` 成对配置才启用 |
 | `QWEATHER_KEY` | 和风天气 API Key |
+
+高德 Key 也可以用**本地文件**提供：在项目根目录创建 `amap.key`（一行纯文本，写入 Key 即可）。这在 IDE 运行、双击二进制等不方便设环境变量的场景更省事。读取优先级：环境变量 `AMAP_KEY` → `amap.key` 文件。该文件已加入 `.gitignore`，不会进入仓库。
 
 ### 命令行参数
 
